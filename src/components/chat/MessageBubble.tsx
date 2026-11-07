@@ -22,6 +22,8 @@ interface MessageBubbleProps {
    * "Cliente" — see lib/clientName.ts.
    */
   clientName?: string | null
+  /** Retries a failed outbound message by its `_localId`; the button is hidden without it. */
+  onRetry?: (localId: string) => void
 }
 
 function formatTime(iso: string): string {
@@ -787,7 +789,7 @@ const BubbleContent = memo(function BubbleContent({ msg, isDocument }: { msg: Me
 
 // ── Main component ────────────────────────────────────────
 
-export default memo(function MessageBubble({ message, advisorName, clientName }: MessageBubbleProps) {
+export default memo(function MessageBubble({ message, advisorName, clientName, onRetry }: MessageBubbleProps) {
   const time = formatTime(message.timestamp)
   const isDocument = message.msg_type === 'document'
 
@@ -838,8 +840,17 @@ export default memo(function MessageBubble({ message, advisorName, clientName }:
         {time}{advisorName ? ` • ${advisorName}` : ''}
       </span>
       {message._status === 'failed' && (
-        <span className="text-[9px] text-error font-semibold mr-1">
+        <span className="text-[9px] text-error font-semibold mr-1 inline-flex items-center gap-1.5">
           No se pudo enviar
+          {onRetry && message._localId && (
+            <button
+              type="button"
+              onClick={() => onRetry(message._localId!)}
+              className="underline hover:no-underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/90"
+            >
+              Reintentar
+            </button>
+          )}
         </span>
       )}
     </div>

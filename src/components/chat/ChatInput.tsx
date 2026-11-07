@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { conversationsService } from '../../services/conversations'
+import { useSendQueue } from '../../hooks/useSendQueue'
 import AudioRecorder from './AudioRecorder'
 import type { Message } from '../../types'
 import {
@@ -62,7 +63,23 @@ interface ChatInputProps {
    * conversation as closed without waiting for the local timer to notice.
    */
   onWindowExpired?: () => void
+  /**
+   * Hands the page a stable function that retries a failed message by its
+   * `_localId` (null on unmount). The page wires it to the bubble's retry button.
+   */
+  onRegisterRetry?: (retry: ((localId: string) => void) | null) => void
 }
+
+// What a failed bubble needs to be sent again — the optimistic bubble itself plus
+// the payload. Entries live until the server confirms the message.
+type OutboxEntry = {
+  localId: string
+  conversationId: string
+  bubble: Message
+} & (
+  | { kind: 'text'; text: string }
+  | { kind: 'media'; file: File; caption: string | undefined; bubbleUrl: string }
+)
 
 function makeLocalId(): string {
   return `local-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -548,6 +565,7 @@ export default function ChatInput({
   onTypingChange,
   whatsappWindow,
   onWindowExpired,
+  onRegisterRetry,
 }: ChatInputProps) {
   const [text, setText] = useState('')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -556,7 +574,6 @@ export default function ChatInput({
   const [attachMenuOpen, setAttachMenuOpen] = useState(false)
   const [emojiMenuOpen, setEmojiMenuOpen] = useState(false)
   const [emojiCategory, setEmojiCategory] = useState('smileys')
-  const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [recorderState, setRecorderState] = useState<string>('idle')
 
@@ -573,10 +590,20 @@ export default function ChatInput({
   const emojiMenuRef = useRef<HTMLDivElement>(null)
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  // Reused across a failed send's retry so the same optimistic bubble is
-  // updated in place instead of a duplicate "sending" bubble appearing.
-  const textRetryLocalIdRef = useRef<string | null>(null)
-  const mediaRetryLocalIdRef = useRef<string | null>(null)
+  // Sends are queued so the composer never waits on the network and messages
+  // leave in the order they were written (see hooks/useSendQueue.ts).
+  const { enqueue } = useSendQueue()
+  // Unconfirmed messages by `_localId`, kept so a failed bubble can be retried
+  // in place instead of a duplicate "sending" bubble appearing.
+  const outboxRef = useRef(new Map<string, OutboxEntry>())
+  // The queue outlives a conversation switch, so a failure must know which
+  // conversation is open now. Also remembers the failure the error banner's
+  // "Reintentar" resends, since the composer no longer holds the failed text.
+  const conversationIdRef = useRef(conversationId)
+  const failedLocalIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    conversationIdRef.current = conversationId
+  }, [conversationId])
 
   // Auto-focus textarea when switching conversations, loading, or when recording ends
   useEffect(() => {
@@ -755,6 +782,7 @@ export default function ChatInput({
   }
 
   function showError(message: string) {
+    failedLocalIdRef.current = null
     setSendError(message)
   }
 
@@ -766,14 +794,96 @@ export default function ChatInput({
     }
   }
 
-  async function sendTextMessage() {
+  function scrollFeedToEnd() {
+    setTimeout(() => {
+      const feed = document.getElementById('chat-message-feed')
+      if (feed) feed.scrollTop = feed.scrollHeight
+    }, 50)
+  }
+
+  // Queues the request for an already-painted bubble. The queue runs entries one
+  // at a time, so the order the advisor wrote is the order Meta receives.
+  function enqueueEntry(entry: OutboxEntry) {
+    const { localId } = entry
+    outboxRef.current.set(localId, entry)
+
+    enqueue({
+      run: async () => {
+        const { message } =
+          entry.kind === 'text'
+            ? await conversationsService.replyText(entry.conversationId, entry.text)
+            : await conversationsService.replyMedia(entry.conversationId, entry.file, entry.caption)
+        outboxRef.current.delete(localId)
+        onMessageConfirmed(localId, message)
+        if (entry.kind === 'media') URL.revokeObjectURL(entry.bubbleUrl)
+      },
+      onFailure: (error) => {
+        onMessageFailed(localId)
+        // The failed bubble is marked either way; the banner and the window state
+        // belong to the conversation that is open now, not to the one that failed.
+        if (entry.conversationId !== conversationIdRef.current) return
+        failedLocalIdRef.current = localId
+        setSendError(
+          getErrorMessage(
+            error,
+            entry.kind === 'text'
+              ? 'No pudimos enviar el mensaje. Revisa tu conexión e intenta de nuevo.'
+              : 'No se pudo enviar el archivo.',
+            entry.kind === 'media' ? entry.file : undefined,
+            windowClosedText,
+          ),
+        )
+        if (isWindowExpired(error)) onWindowExpired?.()
+      },
+      // Never left the browser: an earlier message failed first.
+      onSkipped: () => onMessageFailed(localId),
+    })
+  }
+
+  function retryMessage(localId: string) {
+    const entry = outboxRef.current.get(localId)
+    if (!entry) return
+    if (isWindowClosed) {
+      setSendError(windowClosedText)
+      return
+    }
+    setSendError(null)
+    failedLocalIdRef.current = null
+    onOptimisticMessage({ ...entry.bubble, _status: 'sending' })
+    enqueueEntry(entry)
+  }
+
+  // The retry function handed to the page must stay stable across renders while
+  // always calling the latest closure (current window state, callbacks).
+  const retryMessageRef = useRef(retryMessage)
+  useEffect(() => {
+    retryMessageRef.current = retryMessage
+  })
+  const stableRetry = useCallback((localId: string) => retryMessageRef.current(localId), [])
+  useEffect(() => {
+    onRegisterRetry?.(stableRetry)
+    return () => onRegisterRetry?.(null)
+  }, [onRegisterRetry, stableRetry])
+
+  // Resends the message whose failure raised the banner; any other banner
+  // (validation errors, say) is just dismissed.
+  function handleBannerRetry() {
+    const failedId = failedLocalIdRef.current
+    if (failedId) {
+      retryMessage(failedId)
+      return
+    }
+    setSendError(null)
+  }
+
+  function sendTextMessage() {
     const trimmed = text.trim()
-    const localId = textRetryLocalIdRef.current ?? makeLocalId()
-    textRetryLocalIdRef.current = null
+    const localId = makeLocalId()
+    const now = new Date().toISOString()
 
     // Paint the bubble immediately — the HTTP round-trip (Meta + Storage + DB)
     // can take a few seconds and shouldn't block the perceived send.
-    onOptimisticMessage({
+    const bubble: Message = {
       id: localId,
       conversation_id: conversationId,
       wam_id: null,
@@ -785,50 +895,60 @@ export default function ChatInput({
       media_size_bytes: null,
       transcription: null,
       delivered_via: 'panel',
-      timestamp: new Date().toISOString(),
-      created_at: new Date().toISOString(),
+      timestamp: now,
+      created_at: now,
       advisor_name: currentAdvisorName ?? null,
       _localId: localId,
       _status: 'sending',
-    })
-    setText('')
-    setSending(true)
-    setSendError(null)
-
-    setTimeout(() => {
-      const feed = document.getElementById('chat-message-feed')
-      if (feed) feed.scrollTop = feed.scrollHeight
-    }, 50)
-
-    try {
-      const { message } = await conversationsService.replyText(conversationId, trimmed)
-      onMessageConfirmed(localId, message)
-
-      setTimeout(() => {
-        textareaRef.current?.focus()
-      }, 100)
-    } catch (error) {
-      onMessageFailed(localId)
-      textRetryLocalIdRef.current = localId
-      // The text goes back into the composer on every failure — explicitly
-      // including WINDOW_EXPIRED, where the advisor may want to copy what she
-      // wrote before the window closed on her.
-      setText(trimmed)
-      setSendError(
-        getErrorMessage(
-          error,
-          'No pudimos enviar el mensaje. Revisa tu conexión e intenta de nuevo.',
-          undefined,
-          windowClosedText,
-        ),
-      )
-      if (isWindowExpired(error)) onWindowExpired?.()
-    } finally {
-      setSending(false)
     }
+    onOptimisticMessage(bubble)
+    setText('')
+    setSendError(null)
+    scrollFeedToEnd()
+    textareaRef.current?.focus()
+
+    enqueueEntry({ kind: 'text', localId, conversationId, bubble, text: trimmed })
   }
 
-  async function handleSend() {
+  function sendSelectedFile(file: File) {
+    // PW-5 — enviar multimedia
+    const caption = text.trim() || undefined
+    const category = getFileType(file.type) ?? 'document'
+    const localId = makeLocalId()
+    const now = new Date().toISOString()
+    // The composer's own preview URL is released as soon as the composer clears,
+    // so the bubble gets its own until the server's signed URL replaces it.
+    const bubbleUrl = URL.createObjectURL(file)
+
+    const bubble: Message = {
+      id: localId,
+      conversation_id: conversationId,
+      wam_id: null,
+      direction: 'outbound_advisor',
+      msg_type: category,
+      content: caption ?? null,
+      media_url: bubbleUrl,
+      media_mime_type: file.type,
+      media_size_bytes: file.size,
+      transcription: null,
+      delivered_via: 'panel',
+      timestamp: now,
+      created_at: now,
+      advisor_name: currentAdvisorName ?? null,
+      _localId: localId,
+      _status: 'sending',
+      _fileName: file.name,
+    }
+    onOptimisticMessage(bubble)
+    removeSelectedFile()
+    setText('')
+    setSendError(null)
+    scrollFeedToEnd()
+
+    enqueueEntry({ kind: 'media', localId, conversationId, bubble, file, caption, bubbleUrl })
+  }
+
+  function handleSend() {
     updateTypingStatus(false)
     // Belt and braces: every entry point is disabled while the window is closed,
     // but a stale keydown must not slip a doomed request past it either.
@@ -837,67 +957,12 @@ export default function ChatInput({
       return
     }
     if (selectedFile) {
-      // PW-5 — enviar multimedia
-      const file = selectedFile
-      const caption = text.trim() || undefined
-      const category = getFileType(file.type) ?? 'document'
-      const localId = mediaRetryLocalIdRef.current ?? makeLocalId()
-      mediaRetryLocalIdRef.current = null
-
-      // Show the local blob preview as the bubble right away instead of
-      // waiting for the file to upload to Storage and be delivered via Meta.
-      onOptimisticMessage({
-        id: localId,
-        conversation_id: conversationId,
-        wam_id: null,
-        direction: 'outbound_advisor',
-        msg_type: category,
-        content: caption ?? null,
-        media_url: previewUrl,
-        media_mime_type: file.type,
-        media_size_bytes: file.size,
-        transcription: null,
-        delivered_via: 'panel',
-        timestamp: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-        advisor_name: currentAdvisorName ?? null,
-        _localId: localId,
-        _status: 'sending',
-        _fileName: file.name,
-      })
-      setPreviewModalOpen(false)
-      setSending(true)
-      setSendError(null)
-
-      setTimeout(() => {
-        const feed = document.getElementById('chat-message-feed')
-        if (feed) feed.scrollTop = feed.scrollHeight
-      }, 50)
-
-      try {
-        const { message } = await conversationsService.replyMedia(conversationId, file, caption)
-        onMessageConfirmed(localId, message)
-        removeSelectedFile()
-        setText('')
-
-        setTimeout(() => {
-          textareaRef.current?.focus()
-        }, 100)
-      } catch (error) {
-        onMessageFailed(localId)
-        mediaRetryLocalIdRef.current = localId
-        setSendError(
-          getErrorMessage(error, 'No se pudo enviar el archivo.', file, windowClosedText),
-        )
-        if (isWindowExpired(error)) onWindowExpired?.()
-      } finally {
-        setSending(false)
-      }
+      sendSelectedFile(selectedFile)
       return
     }
     if (text.trim()) {
-      // PW-4 — enviar texto (flujo existente)
-      await sendTextMessage()
+      // PW-4 — enviar texto
+      sendTextMessage()
     }
   }
 
@@ -971,7 +1036,7 @@ export default function ChatInput({
           </span>
           <button
             type="button"
-            onClick={() => { setSendError(null); handleSend() }}
+            onClick={handleBannerRetry}
             className="shrink-0 ml-3 bg-error/20 hover:bg-error/40 text-error px-3 py-1.5 rounded-control font-bold text-[10px] uppercase border border-error/30 transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/90"
           >
             Reintentar
@@ -1044,7 +1109,7 @@ export default function ChatInput({
             <button
               type="button"
               onClick={toggleAttachMenu}
-              disabled={!canCompose || sending || selectedFile !== null}
+              disabled={!canCompose || selectedFile !== null}
               className="p-2.5 text-text-secondary hover:text-white hover:bg-border-default rounded-control transition active:scale-[0.98] disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/90"
               title="Adjuntar archivo"
             >
@@ -1099,7 +1164,7 @@ export default function ChatInput({
             <button
               type="button"
               onClick={() => setEmojiMenuOpen((open) => !open)}
-              disabled={!canCompose || sending}
+              disabled={!canCompose}
               className="p-2.5 text-text-secondary hover:text-white hover:bg-border-default rounded-control transition active:scale-[0.98] disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/90"
               title="Insertar emoji"
             >
@@ -1180,7 +1245,7 @@ export default function ChatInput({
             <textarea
               ref={textareaRef}
               value={text}
-              disabled={sending || !canCompose}
+              disabled={!canCompose}
               onChange={(e) => {
                 const val = e.target.value
                 if (val.length > 2000) {
@@ -1220,16 +1285,12 @@ export default function ChatInput({
               <button
                 type="button"
                 onClick={handleSend}
-                disabled={sending || !canCompose || (!text.trim() && !selectedFile)}
+                disabled={!canCompose || (!text.trim() && !selectedFile)}
                 className="bg-brand-blue hover:bg-brand-blue-hover active:scale-[0.98] text-white p-2.5 rounded-control transition-all flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text-primary/90"
               >
-                {sending ? (
-                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                ) : (
-                  <svg className="w-3.5 h-3.5 transform rotate-45" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                  </svg>
-                )}
+                <svg className="w-3.5 h-3.5 transform rotate-45" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                </svg>
               </button>
             </div>
           </>
@@ -1361,22 +1422,13 @@ export default function ChatInput({
                 <button
                   type="button"
                   onClick={handleSend}
-                  disabled={sending || isWindowClosed}
+                  disabled={isWindowClosed}
                   className="bg-brand-blue hover:bg-brand-blue-hover active:scale-[0.98] text-white text-xs font-bold px-5 py-2.5 rounded-control transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text-primary/90"
                 >
-                  {sending ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Enviando...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>Enviar</span>
-                      <svg className="w-3.5 h-3.5 transform rotate-45" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                      </svg>
-                    </>
-                  )}
+                  <span>Enviar</span>
+                  <svg className="w-3.5 h-3.5 transform rotate-45" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                  </svg>
                 </button>
               </div>
             </div>

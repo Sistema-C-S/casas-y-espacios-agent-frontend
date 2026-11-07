@@ -610,6 +610,16 @@ export default function ChatPage() {
     [],
   );
 
+  // ChatInput owns the payloads of unconfirmed messages, so it hands the page a
+  // retry function; the bubble's "Reintentar" button reaches it through here.
+  const retryHandlerRef = useRef<((localId: string) => void) | null>(null);
+  const registerRetryHandler = useCallback((retry: ((localId: string) => void) | null) => {
+    retryHandlerRef.current = retry;
+  }, []);
+  const retryMessage = useCallback((localId: string) => {
+    retryHandlerRef.current?.(localId);
+  }, []);
+
   const failOptimisticMessage = useCallback((localId: string) => {
     setMessages((prev) =>
       prev.map((m) => (m._localId === localId ? { ...m, _status: "failed" as const } : m)),
@@ -1107,6 +1117,7 @@ export default function ChatPage() {
           onScrollTop={loadMoreMessages}
           feedRef={feedRef}
           highlightedWamId={highlightedWamId}
+          onRetryMessage={retryMessage}
         />
 
         {/* Input area or banners */}
@@ -1122,6 +1133,7 @@ export default function ChatPage() {
             onMessageFailed={failOptimisticMessage}
             whatsappWindow={whatsappWindow}
             onWindowExpired={handleWindowExpired}
+            onRegisterRetry={registerRetryHandler}
           />
         ) : (
           <div className="p-3 bg-bg-secondary border-t border-border-default shrink-0">
