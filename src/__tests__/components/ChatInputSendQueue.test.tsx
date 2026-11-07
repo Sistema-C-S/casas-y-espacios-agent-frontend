@@ -181,6 +181,27 @@ describe('ChatInput send queue', () => {
     expect(ui.onMessageConfirmed).toHaveBeenCalledWith(localId, expect.objectContaining({ id: 'm1' }))
   })
 
+  it('retries the failed message from the error banner without touching the draft', async () => {
+    replyText
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValueOnce(serverMessage('m1', 'uno'))
+    const ui = setup()
+
+    ui.send('uno')
+    await flush()
+    await flush()
+    fireEvent.change(ui.textarea(), { target: { value: 'borrador' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /reintentar/i }))
+    await flush()
+    await flush()
+
+    expect(replyText).toHaveBeenCalledTimes(2)
+    expect(replyText).toHaveBeenLastCalledWith('conv-1', 'uno')
+    expect(ui.textarea().value).toBe('borrador')
+    expect(screen.queryByRole('button', { name: /reintentar/i })).toBeNull()
+  })
+
   it('ignores a retry for a message it does not know', async () => {
     const ui = setup()
 

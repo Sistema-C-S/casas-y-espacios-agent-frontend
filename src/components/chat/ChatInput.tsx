@@ -596,6 +596,14 @@ export default function ChatInput({
   // Unconfirmed messages by `_localId`, kept so a failed bubble can be retried
   // in place instead of a duplicate "sending" bubble appearing.
   const outboxRef = useRef(new Map<string, OutboxEntry>())
+  // The queue outlives a conversation switch, so a failure must know which
+  // conversation is open now. Also remembers the failure the error banner's
+  // "Reintentar" resends, since the composer no longer holds the failed text.
+  const conversationIdRef = useRef(conversationId)
+  const failedLocalIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    conversationIdRef.current = conversationId
+  }, [conversationId])
 
   // Auto-focus textarea when switching conversations, loading, or when recording ends
   useEffect(() => {
@@ -774,6 +782,7 @@ export default function ChatInput({
   }
 
   function showError(message: string) {
+    failedLocalIdRef.current = null
     setSendError(message)
   }
 
@@ -810,6 +819,10 @@ export default function ChatInput({
       },
       onFailure: (error) => {
         onMessageFailed(localId)
+        // The failed bubble is marked either way; the banner and the window state
+        // belong to the conversation that is open now, not to the one that failed.
+        if (entry.conversationId !== conversationIdRef.current) return
+        failedLocalIdRef.current = localId
         setSendError(
           getErrorMessage(
             error,
@@ -835,6 +848,7 @@ export default function ChatInput({
       return
     }
     setSendError(null)
+    failedLocalIdRef.current = null
     onOptimisticMessage({ ...entry.bubble, _status: 'sending' })
     enqueueEntry(entry)
   }
@@ -850,6 +864,17 @@ export default function ChatInput({
     onRegisterRetry?.(stableRetry)
     return () => onRegisterRetry?.(null)
   }, [onRegisterRetry, stableRetry])
+
+  // Resends the message whose failure raised the banner; any other banner
+  // (validation errors, say) is just dismissed.
+  function handleBannerRetry() {
+    const failedId = failedLocalIdRef.current
+    if (failedId) {
+      retryMessage(failedId)
+      return
+    }
+    setSendError(null)
+  }
 
   function sendTextMessage() {
     const trimmed = text.trim()
@@ -880,6 +905,7 @@ export default function ChatInput({
     setText('')
     setSendError(null)
     scrollFeedToEnd()
+    textareaRef.current?.focus()
 
     enqueueEntry({ kind: 'text', localId, conversationId, bubble, text: trimmed })
   }
@@ -1010,7 +1036,7 @@ export default function ChatInput({
           </span>
           <button
             type="button"
-            onClick={() => { setSendError(null); handleSend() }}
+            onClick={handleBannerRetry}
             className="shrink-0 ml-3 bg-error/20 hover:bg-error/40 text-error px-3 py-1.5 rounded-control font-bold text-[10px] uppercase border border-error/30 transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/90"
           >
             Reintentar
