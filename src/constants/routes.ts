@@ -5,5 +5,6 @@ export const ROUTES = {
   CHAT: '/chat/:id',
   GESTION: '/gestion',
   CONTACTOS: '/contactos',
+  NOTIFICACIONES: '/notificaciones',
   PERFIL: '/perfil',
 } as const

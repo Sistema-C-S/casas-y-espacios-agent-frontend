@@ -152,6 +152,52 @@ describe('axios interceptors', () => {
       expect(attempts).toBe(2)
     })
 
+    describe('per-request opt-out (silent)', () => {
+      function failWith(status: number, data: unknown = {}) {
+        apiClient.defaults.adapter = async (config) => {
+          const err = new axios.AxiosError('boom')
+          err.config = config
+          err.response = { status, statusText: 'err', data, headers: {}, config }
+          throw err
+        }
+      }
+      const toasts = () =>
+        (dispatchEventSpy as Mock).mock.calls.filter(
+          (args: unknown[]) => args[0] instanceof CustomEvent && (args[0] as CustomEvent).type === 'api-toast'
+        )
+
+      it('does not toast a silent request that fails with 404 and still rejects', async () => {
+        failWith(404)
+        await expect(apiClient.get('/test', { silent: true })).rejects.toThrow()
+        expect(toasts()).toHaveLength(0)
+      })
+
+      it('does not toast a silent request that fails with 503 SUPABASE_ERROR and still rejects', async () => {
+        failWith(503, { detail: { code: 'SUPABASE_ERROR', message: '' } })
+        await expect(apiClient.get('/test', { silent: true })).rejects.toMatchObject({
+          response: { status: 503 },
+        })
+        expect(toasts()).toHaveLength(0)
+      })
+
+      it('does not toast a silent request that fails with a network error', async () => {
+        apiClient.defaults.adapter = async (config) => {
+          const err = new axios.AxiosError('Network Error')
+          err.config = config
+          throw err
+        }
+        await expect(apiClient.patch('/test', {}, { silent: true })).rejects.toThrow()
+        expect(toasts()).toHaveLength(0)
+      })
+
+      it('keeps toasting requests that are not silent', async () => {
+        failWith(503, { detail: { code: 'SUPABASE_ERROR', message: '' } })
+        await expect(apiClient.get('/test')).rejects.toThrow()
+        expect(toasts()).toHaveLength(1)
+        expect((toasts()[0][0] as CustomEvent).detail.message).toBe('Servicio de almacenamiento no disponible.')
+      })
+    })
+
     it('still rejects the promise on 401 (does not swallow errors)', async () => {
       apiClient.defaults.adapter = async (config) => {
         const err = new axios.AxiosError('Unauthorized')

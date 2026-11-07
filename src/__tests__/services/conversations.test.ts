@@ -134,6 +134,17 @@ describe('conversationsService', () => {
       expect(result.message.id).toBe('msg-1')
     })
 
+    it('sends client_message_id in the JSON body when given', async () => {
+      vi.mocked(apiClient.post).mockResolvedValue({ data: { data: { message: { id: 'm' } } } } as never)
+
+      await conversationsService.replyText('conv-1', 'Hello', 'uuid-1')
+
+      expect(apiClient.post).toHaveBeenCalledWith('/api/v1/panel/conversations/conv-1/reply', {
+        text: 'Hello',
+        client_message_id: 'uuid-1',
+      })
+    })
+
     it('should propagate text message errors', async () => {
       const error = new Error('Message too long')
       vi.mocked(apiClient.post).mockRejectedValue(error)
@@ -168,6 +179,39 @@ describe('conversationsService', () => {
 
       const call = vi.mocked(apiClient.post).mock.calls[0]
       expect(call[1]).toBeInstanceOf(FormData)
+    })
+  })
+
+  describe('client_message_id on media and audio', () => {
+    it('appends client_message_id to the media form', async () => {
+      vi.mocked(apiClient.post).mockResolvedValue({ data: { data: { message: { id: 'm' } } } } as never)
+      const file = new File(['c'], 'a.jpg', { type: 'image/jpeg' })
+
+      await conversationsService.replyMedia('conv-1', file, 'cap', 'uuid-2')
+
+      const form = vi.mocked(apiClient.post).mock.calls[0][1] as FormData
+      expect(form.get('client_message_id')).toBe('uuid-2')
+      expect(form.get('caption')).toBe('cap')
+    })
+
+    it('appends client_message_id to the audio form', async () => {
+      vi.mocked(apiClient.post).mockResolvedValue({ data: { data: { message: { id: 'm' } } } } as never)
+
+      await conversationsService.replyAudio('conv-1', new Blob(['a'], { type: 'audio/ogg' }), 'uuid-3')
+
+      const form = vi.mocked(apiClient.post).mock.calls[0][1] as FormData
+      expect(form.get('client_message_id')).toBe('uuid-3')
+    })
+
+    it('omits the field when no id is given (previous behaviour)', async () => {
+      vi.mocked(apiClient.post).mockResolvedValue({ data: { data: { message: { id: 'm' } } } } as never)
+
+      await conversationsService.replyMedia('conv-1', new File(['c'], 'a.jpg', { type: 'image/jpeg' }))
+      await conversationsService.replyAudio('conv-1', new Blob(['a'], { type: 'audio/ogg' }))
+
+      for (const call of vi.mocked(apiClient.post).mock.calls) {
+        expect((call[1] as FormData).has('client_message_id')).toBe(false)
+      }
     })
   })
 

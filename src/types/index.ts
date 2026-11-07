@@ -87,6 +87,8 @@ export interface Client {
   user_name: string | null;
   full_name: string | null;
   document_id: string | null;
+  /** Correo que dio el prospecto comercial; null si no lo dio. Opcional: no mostrar si falta. */
+  email?: string | null;
   client_type: ClientType;
 }
 
@@ -98,6 +100,8 @@ export interface ClientDirectoryEntry {
   bsuid: string | null;
   document_id: string | null;
   full_name: string | null;
+  /** Optional — null when the client never gave one. Only render when present. */
+  email?: string | null;
   client_type: ClientType;
   is_authenticated: boolean;
   created_at: string;
@@ -424,3 +428,5 @@ export interface WSMessageMediaUpdated {
   media_url: string;
   media_mime_type: string | null;
 }
+
+export * from "./notifications";

@@ -9,12 +9,15 @@
       in components. Tighten this progressively by migrating to nonce-based styles.
       For frame-ancestors and stricter enforcement, configure HTTP headers in Railway
       (RAILWAY_HEADERS env / nginx config) — meta CSP does not support frame-ancestors.
+      image.wasi.co / images.wasi.co: the bot's listing cards are stored with their public
+      Wasi photo URL (never copied to Storage), so the panel loads them straight from
+      Wasi's CDN. The Wasi API returns image.wasi.co; its public site uses images.wasi.co.
     -->
     <meta http-equiv="Content-Security-Policy" content="
       default-src 'self';
       script-src 'self';
       style-src 'self' 'unsafe-inline';
-      img-src 'self' data: blob: https://*.supabase.co;
+      img-src 'self' data: blob: https://*.supabase.co https://image.wasi.co https://images.wasi.co;
       media-src 'self' blob: https://*.supabase.co;
       frame-src blob:;
       connect-src 'self' https://*.railway.app wss://*.railway.app https://*.supabase.co wss://*.supabase.co;

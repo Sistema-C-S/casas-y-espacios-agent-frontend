@@ -53,6 +53,9 @@ export default function AudioRecorder({
   const recorderRef = useRef<any>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const retryLocalIdRef = useRef<string | null>(null)
+  // Idempotency key for the backend (client_message_id): one per recording, reused on
+  // every retry, so a retry after a lost response never sends the audio twice.
+  const retryClientMessageIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     // @ts-ignore
@@ -60,6 +63,8 @@ export default function AudioRecorder({
   }, [])
 
   async function startRecording() {
+    retryLocalIdRef.current = null
+    retryClientMessageIdRef.current = null
     setState('requesting_permission')
     setErrorMessage(null)
 
@@ -104,6 +109,10 @@ export default function AudioRecorder({
       }
     } catch {}
     if (audioUrl) URL.revokeObjectURL(audioUrl)
+    // A discarded or delivered clip never lends its idempotency key to the next one:
+    // the backend would answer the new audio with the old message.
+    retryLocalIdRef.current = null
+    retryClientMessageIdRef.current = null
     setAudioBlob(null)
     setAudioUrl(null)
     setElapsedSeconds(0)
@@ -122,6 +131,8 @@ export default function AudioRecorder({
 
     const localId = retryLocalIdRef.current ?? makeLocalId()
     retryLocalIdRef.current = null
+    const clientMessageId = retryClientMessageIdRef.current ?? crypto.randomUUID()
+    retryClientMessageIdRef.current = null
 
     // Show the recorded clip as a bubble immediately — uploading + delivering
     // via Meta can take a few seconds and shouldn't block the perceived send.
@@ -145,7 +156,11 @@ export default function AudioRecorder({
     })
 
     try {
-      const { message } = await conversationsService.replyAudio(conversationId, audioBlob)
+      const { message } = await conversationsService.replyAudio(
+        conversationId,
+        audioBlob,
+        clientMessageId,
+      )
       onMessageConfirmed(localId, message)
       cancelRecording() // Clear state after success
 
@@ -157,6 +172,7 @@ export default function AudioRecorder({
     } catch (error) {
       onMessageFailed(localId)
       retryLocalIdRef.current = localId
+      retryClientMessageIdRef.current = clientMessageId
       const err = error as { response?: { data?: { detail?: { code?: string } } } }
       const code = err.response?.data?.detail?.code
       if (code === 'FILE_TOO_LARGE') {

@@ -1,6 +1,7 @@
 import type { Conversation } from "../../types";
 import { useAuthStore } from "../../store/authStore";
 import { agentLabel, agentStyles } from "../../lib/agentLabels";
+import { EmailLink } from "../shared/EmailLink";
 
 export type ChatVariant = "assigned" | "unassigned" | "bot" | "monitoring";
 
@@ -141,6 +142,41 @@ export default function ClientPanel({
                 </p>
               </div>
             </div>
+
+            {/*
+              Email is optional — only commercial prospects are asked for it.
+              A client without one renders exactly as before: no row, no
+              "No registrado" placeholder.
+            */}
+            {client.email && (
+              <div className="flex items-center gap-3 px-4 py-3.5">
+                <div className="w-8 h-8 rounded-lg bg-border-default/60 flex items-center justify-center shrink-0">
+                  <svg
+                    className="w-4 h-4 text-text-secondary"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                    />
+                  </svg>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-label text-text-secondary uppercase">
+                    Correo
+                  </p>
+                  <EmailLink
+                    email={client.email}
+                    className="text-white font-mono text-xs"
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="flex items-center gap-3 px-4 py-3.5">
               <div className="w-8 h-8 rounded-lg bg-border-default/60 flex items-center justify-center shrink-0">

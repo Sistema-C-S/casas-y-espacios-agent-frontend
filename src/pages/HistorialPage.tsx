@@ -17,6 +17,8 @@ import { resolutionLabel } from "../constants/resolutions";
 import { useToastStore } from "../store/toastStore";
 import { getWhatsAppWindow, formatWindowCountdown } from "../lib/whatsappWindow";
 import { useWebSocket } from "../hooks/useWebSocket";
+import { buildChatUrl } from "../lib/notificationRoutes";
+import { extractActiveConversation, notifyActiveConversation } from "../lib/reopenConflict";
 import type { Conversation, ConversationIntent, WSConversationReopened } from "../types";
 
 // ── Helpers ───────────────────────────────────────────────
@@ -245,7 +247,9 @@ export default function HistorialPage() {
             conv.client.full_name?.toLowerCase().includes(search) ?? false;
           const matchesDoc =
             conv.client.document_id?.toLowerCase().includes(search) ?? false;
-          if (!matchesName && !matchesDoc) return false;
+          const matchesEmail =
+            conv.client.email?.toLowerCase().includes(search) ?? false;
+          if (!matchesName && !matchesDoc && !matchesEmail) return false;
         }
 
         if (intentFilter !== "todos") {
@@ -292,7 +296,7 @@ export default function HistorialPage() {
       useToastStore.getState().showToast("Conversación reabierta.", "success");
       // Send the advisor straight into the chat she just reopened, so she can
       // write the first message without a second click to find the conversation.
-      navigate(`/chat/${id}`);
+      navigate(buildChatUrl(id));
     } catch (err: unknown) {
       const code = extractErrorCode(err);
       if (code === "CONTROL_ALREADY_TAKEN") {
@@ -319,12 +323,19 @@ export default function HistorialPage() {
         // client+line — the router only ever routes an incoming message to
         // one of them (most recent by last_activity), so the other never
         // receives another message again. This conversation stays closed;
-        // the advisor works the client from their existing active chat.
-        useToastStore.getState().showToast(
-          extractErrorMessage(err) ??
-            "El cliente ya tiene una conversación activa — ábrala desde ahí en vez de reabrir esta.",
-          "error",
-        );
+        // the advisor works the client from their existing active chat — so
+        // when the backend names it, open it for her.
+        const active = extractActiveConversation(err);
+        if (active) {
+          notifyActiveConversation(active);
+          navigate(buildChatUrl(active.id));
+        } else {
+          useToastStore.getState().showToast(
+            extractErrorMessage(err) ??
+              "El cliente ya tiene una conversación activa — ábrala desde ahí en vez de reabrir esta.",
+            "error",
+          );
+        }
       }
     } finally {
       setReopeningIds((prev) => {
@@ -357,6 +368,8 @@ export default function HistorialPage() {
         caseNumber: conv.case_number ?? "—",
         client: conv.client.full_name ?? "Sin identificar",
         document: conv.client.document_id ?? "—",
+        // Empty (not "—") when missing: the email is optional and its absence is normal.
+        email: conv.client.email ?? "",
         intent: conv.intent ? INTENT_LABEL[conv.intent] : "—",
         closedAt: formattedDate,
         duration: formatDuration(conv.duration_seconds),
@@ -377,6 +390,7 @@ export default function HistorialPage() {
       { header: "N° de Caso", key: "caseNumber", width: 14 },
       { header: "Cliente", key: "client", width: 24 },
       { header: "Cédula", key: "document", width: 14 },
+      { header: "Correo", key: "email", width: 28 },
       { header: "Fecha de Cierre", key: "closedAt", width: 18 },
       { header: "Intención", key: "intent", width: 18 },
       { header: "Duración", key: "duration", width: 14 },
@@ -445,7 +459,7 @@ export default function HistorialPage() {
             type="text"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            placeholder="Buscar por cliente, cédula..."
+            placeholder="Buscar por cliente, cédula o correo..."
             className="w-full bg-bg-tertiary border border-border-default text-text-primary text-xs rounded-lg pl-8 pr-3 py-2 outline-none focus:border-brand-blue transition"
           />
           <svg

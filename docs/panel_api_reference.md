@@ -175,6 +175,7 @@ No request body required.
           "phone_number": "+573001234567",
           "bsuid": null,
           "user_name": null,
+          "email": null,
           "full_name": "Carlos Rodríguez",
           "document_id": "1020304050",
           "client_type": "propietario"
@@ -280,6 +281,7 @@ No request body required.
         "phone_number": "+573001234567",
         "bsuid": null,
         "user_name": null,
+        "email": null,
         "document_id": "1020304050",
         "client_type": "propietario"
       },
@@ -466,6 +468,9 @@ msg_type = "document" → render download link using media_url
 | Field  | Type     | Constraints                              |
 | ------ | -------- | ---------------------------------------- |
 | `text` | `string` | Required, non-empty, max 4096 characters |
+| `client_message_id` | `string` (UUID) | Optional. Client-generated idempotency key, see below |
+
+`client_message_id` makes a retry idempotent: the panel generates one UUID per message when the advisor sends and reuses it on every retry. If a message with that id already exists in the conversation, the backend returns that existing message (same `200` envelope) and does **not** send to WhatsApp again.
 
 **Response 200:**
 
@@ -535,6 +540,7 @@ msg_type = "document" → render download link using media_url
 | --------- | -------- | --------------------------------------- |
 | `file`    | `File`   | Required. The media file                |
 | `caption` | `string` | Optional. Caption for images and videos |
+| `client_message_id` | `string` (UUID) | Optional. Client-generated idempotency key: a repeated id returns the existing message and does not send again |
 
 **Allowed MIME types and size limits:**
 
@@ -615,6 +621,7 @@ msg_type = "document" → render download link using media_url
 | Field  | Type   | Description              |
 | ------ | ------ | ------------------------ |
 | `file` | `File` | Required. The audio file |
+| `client_message_id` | `string` (UUID) | Optional. Client-generated idempotency key: a repeated id returns the existing message and does not send again |
 
 **Allowed MIME types:** `audio/ogg`, `audio/mpeg`, `audio/mp4`, `audio/aac`, `audio/amr`
 
@@ -823,6 +830,7 @@ Internally this is the same state transition as `take-control`: creates an `esca
 | 409  | `CONVERSATION_NOT_CLOSED` | Conversation `status` is not `cerrada` — use `take-control` instead for a non-closed conversation          |
 | 409  | `WINDOW_EXPIRED`          | `whatsapp_window_expires_at` is `null` (unknown) or already in the past — use an approved template instead |
 | 409  | `CONTROL_ALREADY_TAKEN`   | Another advisor already holds an active escalation on this conversation (rare race) — `message` names them |
+| 409  | `CLIENT_HAS_ACTIVE_CONVERSATION` | The client already has another `activa`/`escalada` conversation on the same line (they wrote again after the close). `detail.active_conversation` = `{id, status, bot_activo, case_number}` — open that one instead (take-control if `bot_activo`) |
 
 **Notes:**
 
@@ -1079,7 +1087,7 @@ Internally this is the same state transition as `take-control`: creates an `esca
 
 | Param    | Type      | Default | Description                                                      |
 | -------- | --------- | ------- | ---------------------------------------------------------------- |
-| `q`      | `string`  | none    | Case-insensitive substring search over name, phone, and document |
+| `q`      | `string`  | none    | Case-insensitive substring search over name, phone, document, and email |
 | `limit`  | `integer` | 20      | Page size (1–100)                                                |
 | `offset` | `integer` | 0       | Pagination offset                                                |
 
@@ -1094,6 +1102,7 @@ Internally this is the same state transition as `take-control`: creates an `esca
         "phone_number": "+573001234567",
         "bsuid": null,
         "user_name": null,
+        "email": null,
         "document_id": "1020304050",
         "full_name": "Carlos Rodríguez",
         "client_type": "propietario",
@@ -1106,6 +1115,7 @@ Internally this is the same state transition as `take-control`: creates an `esca
         "phone_number": null,
         "bsuid": "CO.1A2B3C4D5E6F7G8H",
         "user_name": "ana.g",
+        "email": "ana.g@correo.com",
         "document_id": null,
         "full_name": "Prospecto Nuevo",
         "client_type": "prospecto",
@@ -1134,6 +1144,7 @@ Internally this is the same state transition as `take-control`: creates an `esca
 - `commercial_classification` is `null` unless the client has at least one conversation with `intent = "comercial"` and a set `commercial_classification` (`potencial` / `no_potencial`). When a client has multiple classified commercial conversations over time, this is the classification from the **most recent** one (by `created_at`).
 - This first version deliberately excludes a "contact client" action (depends on WhatsApp message templates — separate feature) and the full commercial requirement summary (only the classification badge is shown here).
 - `bsuid` is a WhatsApp username-based identifier (support_bsuid_from_meta) — present only for contacts who reached the bot via username without ever sharing a phone number; display-only, never dialable.
+- `email` is the address a commercial prospect gave the bot (stored lowercased, as-is); `null` when they never gave one — the common case for administrative clients. The panel shows it only when present.
 - `user_name` is that contact's public WhatsApp username handle — the readable label to show in their row when `phone_number` is `null`, since a `bsuid` is an opaque string. See [Client identity](#client-identity-phone_number-and-bsuid).
 
 ---
@@ -1718,6 +1729,184 @@ Internally this is the same state transition as `take-control`: creates an `esca
 **Notes:**
 
 - `reviewed_by` in the response is the admin's UUID, not their name. The frontend must resolve the name from the advisors list if needed.
+
+---
+
+## Agent Notifications
+
+Notifications the agent records for the team, without escalating the conversation (specs/agent_notifications). The first type is `comprobante_pago`: a client sent a payment receipt (image or PDF) that someone should register. **A notification is never an escalation** — creating, resolving or discarding one never changes `bot_activo`, the assigned advisor, or the advisor's conversation quota.
+
+Every advisor (`asesor` and `admin`) sees every notification — there is no area filter.
+
+### The notification item
+
+Every endpoint and both WebSocket events use this shape:
+
+```json
+{
+  "id": "6e7f8091-0000-4000-8000-000000000001",
+  "type": "comprobante_pago",
+  "status": "pendiente",
+  "title": "Comprobante de pago",
+  "agent": "administrative",
+  "client": {
+    "id": "550e8400-e29b-41d4-a716-446655440020",
+    "full_name": "Juan Pérez",
+    "phone_number": "+573001112233",
+    "user_name": "Juan"
+  },
+  "conversation": {
+    "id": "550e8400-e29b-41d4-a716-446655440010",
+    "case_number": "CE-123",
+    "status": "activa"
+  },
+  "payload": {},
+  "attachments": [
+    { "wam_id": "wamid.HBgM..." }
+  ],
+  "created_at": "2026-10-04T15:02:11.456789+00:00",
+  "updated_at": "2026-10-04T15:02:11.456789+00:00",
+  "resolved_at": null,
+  "resolved_by": null,
+  "resolution_note": null
+}
+```
+
+| Field | Notes |
+| ----- | ----- |
+| `status` | `pendiente` → `resuelta` \| `descartada`. No other transition and no reopening. |
+| `title` | Fixed label of the type (`"Comprobante de pago"`). The panel may show its own label per `type` instead. |
+| `agent` | Which agent was serving the conversation: `administrative` \| `commercial`. |
+| `client` | Display data. `full_name` may be `null` (client not identified yet); fall back to `user_name`, then `phone_number`. `phone_number` may be `null` for a BSUID-only client. |
+| `conversation` | Link target for "open the chat" (`GET /conversations/{id}`). The conversation may already be `cerrada`. |
+| `payload` | Type-specific data. Always `{}` for `comprobante_pago`: nothing the vision model read from the file (amount, payer, reference) is stored — the advisor checks the real file in the conversation. |
+| `attachments` | The messages that carry this payment's files, oldest first: `{"wam_id"}` only. Open the chat on `attachments[0].wam_id`; the file itself is the message there. A second file of the same conversation sent within 30 minutes (`RECEIPT_DEDUP_WINDOW_MINUTES`) is appended here instead of creating another notification. Notifications created before 2026-10-04 may still carry the older, richer fields — ignore them. |
+| `resolved_by` | `{"id", "full_name"}` of the advisor who closed it, or `null`. |
+
+---
+
+### GET /api/v1/panel/notifications
+
+**Auth required:** Yes (any role)
+
+**Description:** Paginated inbox, newest first. Defaults to pending notifications.
+
+**Query params:**
+
+| Param    | Type      | Default     | Description                                        |
+| -------- | --------- | ----------- | -------------------------------------------------- |
+| `status` | `string`  | `pendiente` | `pendiente` \| `resuelta` \| `descartada` \| `all` |
+| `type`   | `string`  | none        | `comprobante_pago` (the only type today)           |
+| `limit`  | `integer` | 20          | Page size (1–100)                                  |
+| `offset` | `integer` | 0           | Pagination offset                                  |
+
+**Response 200:**
+
+```json
+{
+  "data": {
+    "notifications": [
+      /* notification items */
+    ],
+    "total": 12,
+    "limit": 20,
+    "offset": 0,
+    "pending_count": 7
+  }
+}
+```
+
+**Errors:**
+
+| HTTP | ErrorCode        | When                                                                  |
+| ---- | ---------------- | --------------------------------------------------------------------- |
+| 401  | `INVALID_TOKEN`  | Missing or invalid JWT                                                |
+| 422  | —                | Invalid `status`, `type`, `limit` or `offset`                         |
+| 503  | `SUPABASE_ERROR` | Database unavailable (or migration 013 not applied yet) — retry later |
+
+**Notes:**
+
+- `total` counts the rows matching the filters, ignoring `limit`/`offset`.
+- `pending_count` is **always** the number of pending notifications, whatever the filters — use it for the navigation badge.
+
+---
+
+### GET /api/v1/panel/notifications/{notification_id}
+
+**Auth required:** Yes (any role)
+
+**Path params:**
+
+| Param             | Type            | Description      |
+| ----------------- | --------------- | ---------------- |
+| `notification_id` | `string` (UUID) | The notification |
+
+**Response 200:**
+
+```json
+{
+  "data": {
+    "notification": {
+      /* notification item */
+    }
+  }
+}
+```
+
+**Errors:**
+
+| HTTP | ErrorCode                | When                                               |
+| ---- | ------------------------ | -------------------------------------------------- |
+| 401  | `INVALID_TOKEN`          | Missing or invalid JWT                             |
+| 404  | `NOTIFICATION_NOT_FOUND` | No notification with that id (or not a valid UUID) |
+| 503  | `SUPABASE_ERROR`         | Database unavailable — retry later                 |
+
+---
+
+### PATCH /api/v1/panel/notifications/{notification_id}
+
+**Auth required:** Yes (any role)
+
+**Description:** Closes a pending notification as resolved (e.g. the receipt was registered in the accounting system) or discarded (duplicate, not a receipt). The closing advisor is taken from the JWT. Does not touch the conversation.
+
+**Request body:**
+
+```json
+{ "status": "resuelta", "note": "Registrado en SIMI" }
+```
+
+| Field    | Type     | Required | Description                                      |
+| -------- | -------- | -------- | ------------------------------------------------ |
+| `status` | `string` | Yes      | `resuelta` \| `descartada`                       |
+| `note`   | `string` | No       | Up to 500 characters. Blank is stored as `null`. |
+
+**Response 200:**
+
+```json
+{
+  "data": {
+    "notification": {
+      /* the closed notification item */
+    }
+  }
+}
+```
+
+**Errors:**
+
+| HTTP | ErrorCode                     | When                                                                            |
+| ---- | ----------------------------- | ------------------------------------------------------------------------------- |
+| 401  | `INVALID_TOKEN`               | Missing or invalid JWT                                                          |
+| 404  | `NOTIFICATION_NOT_FOUND`      | No notification with that id (or not a valid UUID)                              |
+| 409  | `NOTIFICATION_ALREADY_CLOSED` | It is no longer `pendiente` — another advisor closed it first                   |
+| 422  | —                             | `status` not `resuelta`/`descartada`, or `note` too long                        |
+| 503  | `SUPABASE_ERROR`              | Database unavailable — the close may not have happened; refetch before retrying |
+
+**Notes:**
+
+- The close is an atomic claim: of two advisors closing the same notification at once, exactly one gets 200 and the other 409. On 409, refresh the row (`GET /notifications/{id}`) to show who closed it.
+- Retrying the same request after a lost response returns 200 (same advisor, same status), never 409.
+- A successful close broadcasts `notification.updated` to every connected advisor.
 
 ---
 
@@ -2383,6 +2572,42 @@ Emitted to **admin advisors only** when background moderation detects inappropri
 
 ---
 
+#### notification.new
+
+Emitted to **all connected advisors** when the agent creates a notification (a client sent a payment receipt and it was registered). Carries the full item, so the inbox can insert the row without a request.
+
+```json
+{
+  "event": "notification.new",
+  "data": {
+    "notification": {
+      /* notification item — see Agent Notifications */
+    },
+    "pending_count": 8
+  }
+}
+```
+
+#### notification.updated
+
+Emitted to **all connected advisors** when an existing notification changes: another file of the same payment was attached, or an advisor resolved/discarded it. Same payload as `notification.new`; replace the row by `notification.id` and set the badge from `pending_count`.
+
+```json
+{
+  "event": "notification.updated",
+  "data": {
+    "notification": {
+      /* notification item */
+    },
+    "pending_count": 7
+  }
+}
+```
+
+**Note:** Events are best-effort (sent after the client's turn). A missed event only means the list is stale until the next `GET /notifications` — refetch on reconnect.
+
+---
+
 ## Enums Reference
 
 ### ConversationStatus
@@ -2474,6 +2699,20 @@ Emitted to **admin advisors only** when background moderation detects inappropri
 | `error_simi`             | SIMI external service failed the maximum number of times                                                             |
 | `frustracion_detectada`  | LLM detected frustration signals in the client's messages                                                            |
 | `control_manual_directo` | An advisor took direct manual control via `PATCH /conversations/{id}/take-control`, without the bot escalating first |
+
+### AgentNotificationType
+
+| Value              | Description                                                     |
+| ------------------ | --------------------------------------------------------------- |
+| `comprobante_pago` | A client sent a payment receipt (image or PDF) to be registered |
+
+### AgentNotificationStatus
+
+| Value        | Description                                                      |
+| ------------ | ---------------------------------------------------------------- |
+| `pendiente`  | Waiting for an advisor                                           |
+| `resuelta`   | An advisor handled it (e.g. registered the payment)              |
+| `descartada` | An advisor dismissed it (duplicate, not actually a receipt, ...) |
 
 ### ClientType
 
@@ -3006,6 +3245,13 @@ ws.onmessage = (event) => {
         showBehaviorAlertNotification(data.alert_id);
         refreshBehaviorAlerts();
       }
+      break;
+
+    case "notification.new":
+    case "notification.updated":
+      // Every advisor: upsert the row by id and update the nav badge
+      upsertNotification(data.notification);
+      setNotificationBadge(data.pending_count);
       break;
   }
 };

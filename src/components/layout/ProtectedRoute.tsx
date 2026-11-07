@@ -6,7 +6,9 @@ import { ROUTES } from '../../constants/routes'
 import Sidebar from './Sidebar'
 import ToastStack from '../shared/ToastStack'
 import EscalationToast from '../shared/EscalationToast'
+import NotificationToast from '../shared/NotificationToast'
 import { useWebSocket } from '../../hooks/useWebSocket'
+import { useNotificationsBadgeSync } from '../../hooks/useNotificationsBadgeSync'
 import type { AdvisorRole, WSStatus } from '../../types'
 
 interface Props {
@@ -17,6 +19,7 @@ export default function ProtectedRoute({ requiredRole }: Props) {
   const { token, role, isFirstLogin } = useAuthStore()
   const [mobileOpen, setMobileOpen] = useState(false)
   const { reconnect } = useWebSocket()
+  useNotificationsBadgeSync(Boolean(token) && !isFirstLogin)
   const location = useLocation()
 
   if (!token) return <Navigate to={ROUTES.LOGIN} state={{ from: location.pathname }} replace />
@@ -41,6 +44,7 @@ export default function ProtectedRoute({ requiredRole }: Props) {
       </div>
 
       <EscalationToast />
+      <NotificationToast />
       <ToastStack />
     </div>
   )
@@ -56,6 +60,8 @@ function MobileHeader({ onOpenSidebar }: { onOpenSidebar: () => void }) {
     '/historial': 'Historial',
     '/gestion': 'Gestión',
     '/perfil': 'Perfil',
+    [ROUTES.CONTACTOS]: 'Contactos',
+    [ROUTES.NOTIFICACIONES]: 'Notificaciones',
   }
 
   const getTitle = () => {

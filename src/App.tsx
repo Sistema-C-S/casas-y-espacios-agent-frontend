@@ -32,6 +32,7 @@ const ChatPage = lazy(() => import('./pages/ChatPage'))
 const HistorialPage = lazy(() => import('./pages/HistorialPage'))
 const ContactosPage = lazy(() => import('./pages/ContactosPage'))
 const PerfilPage = lazy(() => import('./pages/PerfilPage'))
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage'))
 
 function AuthInit() {
   useAuth()
@@ -122,6 +123,7 @@ export default function App() {
               <Route path={ROUTES.CHAT} element={<ChatPage />} />
               <Route path="/historial" element={<HistorialPage />} />
               <Route path={ROUTES.CONTACTOS} element={<ContactosPage />} />
+              <Route path={ROUTES.NOTIFICACIONES} element={<NotificationsPage />} />
               <Route path={ROUTES.PERFIL} element={<PerfilPage />} />
             </Route>
 

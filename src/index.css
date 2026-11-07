@@ -245,6 +245,18 @@
     animation: criticalPulse 2s infinite ease-in-out;
   }
 
+  /* Deep link from a notification to the receipt message in the chat: one
+     finite fade (no infinite animation, no will-change) — the class is
+     removed by useFocusMessage once it has run. */
+  @keyframes messageFocus {
+    0%, 60% { background-color: color-mix(in srgb, var(--color-warning) 18%, transparent); }
+    100%    { background-color: transparent; }
+  }
+  .message-focus-highlight {
+    border-radius: 0.75rem;
+    animation: messageFocus 2.5s ease-out 1;
+  }
+
   @keyframes wsPulse {
     0%   { transform: scale(0.9); opacity: 0.6; }
     50%  { transform: scale(1.25); opacity: 1; }

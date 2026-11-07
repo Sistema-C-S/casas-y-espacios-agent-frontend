@@ -54,7 +54,7 @@ function ToastItem({ toast }: { toast: Toast }) {
   const removeToast = useToastStore((s) => s.removeToast)
   const style = STYLES[toast.type]
 
-  useAutoDismiss(toast.id, removeToast, AUTO_DISMISS_MS)
+  useAutoDismiss(toast.id, removeToast, toast.durationMs ?? AUTO_DISMISS_MS)
 
   return (
     <div

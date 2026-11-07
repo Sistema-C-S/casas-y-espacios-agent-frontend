@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { clientsService } from "../services/clients";
 import { useAbortableLoad } from "../hooks/useAbortableLoad";
+import { EmailLink } from "../components/shared/EmailLink";
 import type { ClientDirectoryEntry, ClientType, CommercialClassification } from "../types";
 
 // The backend GET /clients endpoint only supports `q` — client_type and
@@ -188,7 +189,7 @@ export default function ContactosPage() {
             type="text"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Buscar por nombre, teléfono o documento..."
+            placeholder="Buscar por nombre, teléfono, documento o correo..."
             className="w-full bg-bg-tertiary border border-border-default text-text-primary text-xs rounded-lg pl-8 pr-3 py-2 outline-none focus:border-brand-blue transition"
           />
           <svg
@@ -252,6 +253,7 @@ export default function ContactosPage() {
             <thead className="bg-bg-tertiary/60 border-b border-border-default text-text-secondary text-label uppercase">
               <tr>
                 <th className="p-4 whitespace-nowrap">Nombre</th>
+                <th className="p-4 whitespace-nowrap">Correo</th>
                 <th className="p-4 whitespace-nowrap">Teléfono</th>
                 <th className="p-4 whitespace-nowrap">Documento</th>
                 <th className="p-4 whitespace-nowrap">Tipo de cliente</th>
@@ -261,7 +263,7 @@ export default function ContactosPage() {
             <tbody id="contacts-table-body" className="divide-y divide-border-default">
               {pagedClients.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>
+                  <td colSpan={6}>
                     <div className="text-center py-12">
                       <p className="text-text-secondary text-sm">
                         No se encontraron contactos
@@ -273,12 +275,21 @@ export default function ContactosPage() {
               ) : (
                 pagedClients.map((client) => (
                   <tr key={client.id} className="hover:bg-bg-tertiary/30 transition">
-                    <td
-                      className="p-4 font-bold text-white whitespace-nowrap truncate max-w-[180px]"
-                      title={client.full_name ?? "Sin identificar"}
-                    >
-                      {client.full_name ?? (
-                        <span className="text-text-secondary font-medium italic">Sin identificar</span>
+                    <td className="p-4 whitespace-nowrap">
+                      <p
+                        className="font-bold text-white truncate max-w-[180px]"
+                        title={client.full_name ?? "Sin identificar"}
+                      >
+                        {client.full_name ?? (
+                          <span className="text-text-secondary font-medium italic">Sin identificar</span>
+                        )}
+                      </p>
+                    </td>
+                    <td className="p-4 text-text-secondary whitespace-nowrap">
+                      {client.email ? (
+                        <EmailLink email={client.email} />
+                      ) : (
+                        "—"
                       )}
                     </td>
                     <td className="p-4 text-text-secondary whitespace-nowrap">

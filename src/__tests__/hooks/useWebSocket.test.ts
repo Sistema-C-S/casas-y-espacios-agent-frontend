@@ -497,6 +497,35 @@ describe('useWebSocket — dead sockets and deaf chats', () => {
     unmount()
   })
 
+  // Same root-level trap: an onboarding handoff reassigns the conversation's
+  // agent mid-turn, and ChatPage/BandejaPage merge it from this field.
+  it('carries conversation_agent from message.new through to the handler', async () => {
+    const onMessageNew = vi.fn()
+    const { result, unmount } = renderHook(() => useWebSocket({ onMessageNew }))
+    const ws = await openSocket(result)
+
+    serverSends(ws, {
+      event: 'message.new',
+      data: {
+        conversation_id: 'conv-1',
+        conversation_agent: 'commercial',
+        message: {
+          id: 'msg-3',
+          conversation_id: 'conv-1',
+          direction: 'inbound',
+          msg_type: 'text',
+          content: 'hola',
+          created_at: '2026-09-20T18:30:00+00:00',
+        },
+      },
+    })
+
+    expect(onMessageNew).toHaveBeenCalledTimes(1)
+    expect(onMessageNew.mock.calls[0][0].conversation_agent).toBe('commercial')
+
+    unmount()
+  })
+
   it('passes a missing window as null rather than omitting the field', async () => {
     // An older backend, or a lookup the backend could not resolve. Consumers
     // read null as "no fresh information, keep what is cached" — they must not

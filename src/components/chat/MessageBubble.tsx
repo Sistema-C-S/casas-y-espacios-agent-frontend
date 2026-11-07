@@ -22,6 +22,8 @@ interface MessageBubbleProps {
    * "Cliente" — see lib/clientName.ts.
    */
   clientName?: string | null
+  /** Retries a failed outbound message by its `_localId`; the button is hidden without it. */
+  onRetry?: (localId: string) => void
 }
 
 function formatTime(iso: string): string {
@@ -428,7 +430,7 @@ const ImageBubble = memo(function ImageBubble({ msg }: { msg: Message }) {
 
   if (msg.media_url && hasDisplayableUrl && !imageFailed) {
     return (
-      <div className="flex flex-col gap-1.5 max-w-[240px]">
+      <div className="flex flex-col gap-1.5 w-full min-w-0 max-w-[280px]">
         <div className="relative group/video rounded-lg overflow-hidden">
           <img
             src={msg.media_url}
@@ -447,7 +449,7 @@ const ImageBubble = memo(function ImageBubble({ msg }: { msg: Message }) {
           <FloatingDownloadButton onClick={handleDownload} />
         </div>
         {msg.content && (
-          <p className="text-sm text-text-primary px-1 whitespace-pre-wrap">
+          <p className="text-sm text-text-primary px-1 whitespace-pre-wrap wrap-anywhere">
             {decodeMessageContent(msg.content)}
           </p>
         )}
@@ -465,16 +467,16 @@ const ImageBubble = memo(function ImageBubble({ msg }: { msg: Message }) {
     )
   }
   return (
-    <div className="flex flex-col gap-1.5 max-w-[240px]">
+    <div className="flex flex-col gap-1.5 w-full min-w-0 max-w-[280px]">
       <div className="rounded overflow-hidden border border-border-default">
-        <div className="w-48 h-32 bg-border-default flex items-center justify-center">
+        <div className="w-full h-32 bg-border-default flex items-center justify-center">
           <svg className="w-8 h-8 text-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
         </div>
       </div>
       {msg.content && (
-        <p className="text-sm text-text-primary px-1 whitespace-pre-wrap">
+        <p className="text-sm text-text-primary px-1 whitespace-pre-wrap wrap-anywhere">
           {decodeMessageContent(msg.content)}
         </p>
       )}
@@ -537,7 +539,7 @@ const DocumentBubble = memo(function DocumentBubble({ msg }: { msg: Message }) {
         </button>
       </div>
       {msg.content && (
-        <p className={`mt-2 px-1 text-sm whitespace-pre-wrap leading-relaxed ${
+        <p className={`mt-2 px-1 text-sm whitespace-pre-wrap wrap-anywhere leading-relaxed ${
           isAdvisor ? 'text-white font-medium animate-fade-in' : 'text-text-primary'
         }`}>
           {decodeMessageContent(msg.content)}
@@ -683,7 +685,7 @@ const VideoBubble = memo(function VideoBubble({ msg }: { msg: Message }) {
         </div>
 
         {msg.content && (
-          <p className={`mt-2.5 px-1 text-sm whitespace-pre-wrap leading-relaxed ${
+          <p className={`mt-2.5 px-1 text-sm whitespace-pre-wrap wrap-anywhere leading-relaxed ${
             isAdvisor ? 'text-white font-medium animate-fade-in' : 'text-text-primary'
           }`}>
             {decodeMessageContent(msg.content)}
@@ -763,7 +765,7 @@ const VideoBubble = memo(function VideoBubble({ msg }: { msg: Message }) {
         <span className="text-[10px] text-text-secondary font-medium px-2 text-center">Video no disponible</span>
       </div>
       {msg.content && (
-        <p className="text-sm text-text-primary px-1 whitespace-pre-wrap leading-relaxed">
+        <p className="text-sm text-text-primary px-1 whitespace-pre-wrap wrap-anywhere leading-relaxed">
           {decodeMessageContent(msg.content)}
         </p>
       )}
@@ -780,14 +782,14 @@ const BubbleContent = memo(function BubbleContent({ msg, isDocument }: { msg: Me
     case 'audio': return <AudioBubble msg={msg} />
     case 'video': return <VideoBubble msg={msg} />
     default: return (
-      <p className="text-sm leading-relaxed">{decodeMessageContent(msg.content)}</p>
+      <p className="text-sm leading-relaxed wrap-anywhere">{decodeMessageContent(msg.content)}</p>
     )
   }
 })
 
 // ── Main component ────────────────────────────────────────
 
-export default memo(function MessageBubble({ message, advisorName, clientName }: MessageBubbleProps) {
+export default memo(function MessageBubble({ message, advisorName, clientName, onRetry }: MessageBubbleProps) {
   const time = formatTime(message.timestamp)
   const isDocument = message.msg_type === 'document'
 
@@ -838,8 +840,17 @@ export default memo(function MessageBubble({ message, advisorName, clientName }:
         {time}{advisorName ? ` • ${advisorName}` : ''}
       </span>
       {message._status === 'failed' && (
-        <span className="text-[9px] text-error font-semibold mr-1">
+        <span className="text-[9px] text-error font-semibold mr-1 inline-flex items-center gap-1.5">
           No se pudo enviar
+          {onRetry && message._localId && (
+            <button
+              type="button"
+              onClick={() => onRetry(message._localId!)}
+              className="underline hover:no-underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/90"
+            >
+              Reintentar
+            </button>
+          )}
         </span>
       )}
     </div>
