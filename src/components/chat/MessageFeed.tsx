@@ -124,6 +124,8 @@ interface MessageFeedProps {
   isTyping?: boolean
   /** wam_id of the message to highlight briefly (deep link from a notification). */
   highlightedWamId?: string | null
+  /** Retries a failed outbound message by its `_localId` (see ChatInput). */
+  onRetryMessage?: (localId: string) => void
 }
 
 export default memo(function MessageFeed({
@@ -138,6 +140,7 @@ export default memo(function MessageFeed({
   feedRef,
   isTyping,
   highlightedWamId = null,
+  onRetryMessage,
 }: MessageFeedProps) {
   const handleScroll = useCallback(() => {
     if (feedRef.current && feedRef.current.scrollTop === 0) {
@@ -191,6 +194,7 @@ export default memo(function MessageFeed({
                           : undefined
                       }
                       clientName={clientName}
+                      onRetry={onRetryMessage}
                     />
                   </div>
                 )
