@@ -19,6 +19,7 @@ vi.mock('../../services/conversations', () => ({
 }))
 
 import ChatInput from '../../components/chat/ChatInput'
+import { useToastStore } from '../../store/toastStore'
 
 type Retry = (localId: string) => void
 
@@ -44,10 +45,10 @@ function setup(windowState: 'open' | 'closed' = 'open') {
   const onMessageFailed = vi.fn()
   let retry: Retry | null = null
 
-  render(
+  const props = (conversationId: string, clientName: string) => (
     <ChatInput
-      conversationId="conv-1"
-      clientName="Cliente"
+      conversationId={conversationId}
+      clientName={clientName}
       agentDisplay="Administrativa"
       waitMinutes={null}
       onOptimisticMessage={onOptimisticMessage}
@@ -59,14 +60,19 @@ function setup(windowState: 'open' | 'closed' = 'open') {
         canReply: windowState === 'open',
         msLeft: windowState === 'open' ? 3_600_000 : 0,
       }}
-    />,
+    />
   )
+
+  const { rerender } = render(props('conv-1', 'Cliente'))
 
   const textarea = () => screen.getByRole('textbox') as HTMLTextAreaElement
   const send = (text: string) => {
     fireEvent.change(textarea(), { target: { value: text } })
     fireEvent.keyDown(textarea(), { key: 'Enter' })
   }
+  // The page does not remount the composer when the advisor opens another chat.
+  const switchTo = (conversationId: string, clientName: string) =>
+    rerender(props(conversationId, clientName))
 
   return {
     onOptimisticMessage,
@@ -75,11 +81,13 @@ function setup(windowState: 'open' | 'closed' = 'open') {
     getRetry: () => retry,
     textarea,
     send,
+    switchTo,
   }
 }
 
 beforeEach(() => {
   replyText.mockReset()
+  useToastStore.setState({ toasts: [] })
 })
 
 describe('ChatInput send queue', () => {
@@ -210,5 +218,87 @@ describe('ChatInput send queue', () => {
 
     expect(replyText).not.toHaveBeenCalled()
     expect(ui.onOptimisticMessage).not.toHaveBeenCalled()
+  })
+})
+
+describe('ChatInput send queue across conversations', () => {
+  it('raises a global toast naming the client when a send fails after switching chats', async () => {
+    const first = deferred<{ message: Message }>()
+    replyText.mockReturnValueOnce(first.promise)
+    const ui = setup()
+    ui.switchTo('conv-a', 'María Pérez')
+
+    ui.send('necesito la factura del mes')
+    await flush()
+    ui.switchTo('conv-b', 'Carlos Gómez')
+
+    await act(async () => { first.reject(new Error('network')) })
+    await flush()
+    await flush()
+
+    const toasts = useToastStore.getState().toasts
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].type).toBe('error')
+    expect(toasts[0].message).toBe(
+      'No se pudo enviar tu mensaje a María Pérez: «necesito la factura del mes». Ábrelo y envíalo de nuevo.',
+    )
+    // The banner belongs to the chat on screen, which did not fail.
+    expect(screen.queryByRole('button', { name: /reintentar/i })).toBeNull()
+  })
+
+  it('does not raise a toast when the failure happens in the open chat', async () => {
+    replyText.mockRejectedValueOnce(new Error('network'))
+    const ui = setup()
+
+    ui.send('uno')
+    await flush()
+    await flush()
+
+    expect(useToastStore.getState().toasts).toHaveLength(0)
+    expect(screen.getByRole('button', { name: /reintentar/i })).toBeInTheDocument()
+  })
+
+  it('does not let a stuck send in one conversation delay a send in another', async () => {
+    const stuck = deferred<{ message: Message }>()
+    replyText
+      .mockReturnValueOnce(stuck.promise)
+      .mockResolvedValueOnce(serverMessage('m-b', 'hola b'))
+    const ui = setup()
+    ui.switchTo('conv-a', 'María')
+
+    ui.send('en a')
+    await flush()
+    ui.switchTo('conv-b', 'Carlos')
+    ui.send('hola b')
+    await flush()
+    await flush()
+
+    expect(replyText).toHaveBeenCalledTimes(2)
+    expect(replyText).toHaveBeenLastCalledWith('conv-b', 'hola b')
+    expect(ui.onMessageConfirmed).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ id: 'm-b' }),
+    )
+  })
+
+  it('does not fail the sends of another conversation when one conversation fails', async () => {
+    const first = deferred<{ message: Message }>()
+    replyText
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(serverMessage('m-b', 'hola b'))
+    const ui = setup()
+    ui.switchTo('conv-a', 'María')
+
+    ui.send('en a')
+    await flush()
+    ui.switchTo('conv-b', 'Carlos')
+    ui.send('hola b')
+    await flush()
+    await act(async () => { first.reject(new Error('network')) })
+    await flush()
+    await flush()
+
+    expect(ui.onMessageFailed).toHaveBeenCalledTimes(1)
+    expect(ui.onMessageConfirmed).toHaveBeenCalledTimes(1)
   })
 })
