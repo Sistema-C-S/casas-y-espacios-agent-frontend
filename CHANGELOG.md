@@ -2,6 +2,21 @@
 
 Todas las versiones notables de este proyecto se documentan en este archivo.
 
+## [2.7.0] - 2026-11-07
+
+Requiere el backend 2.12.0 (notificaciones del agente y correo del cliente). Desplegar después del backend.
+
+### Added
+- Bandeja de notificaciones del agente (comprobantes de pago): pestañas por estado, cierre como resuelta o descartada con nota, contador en el menú y aviso en vivo por WebSocket. Abrir una notificación lleva al chat en el mensaje del comprobante.
+- Correo del cliente en el panel del chat, en Contactos (columna propia, búsqueda) y en el historial; un clic lo copia.
+- Cola de envío en el chat: el composer nunca espera a la red, y un mensaje fallido se reintenta desde el aviso de error.
+
+### Fixed
+- Reabrir una conversación bloqueada abre la conversación activa y mantiene el aviso visible; el botón de tomar control tiene nombre.
+- Las imágenes y los links largos ya no se salen de la burbuja del chat.
+- La política de seguridad de contenido permite las fotos de inmuebles de Wasi.
+- Se resolvieron todas las vulnerabilidades reportadas por `npm audit`.
+
 ## [2.6.0] - 2026-09-27
 
 Requiere el backend 2.10.0 (un número, dos agentes). Desplegar después del backend.
