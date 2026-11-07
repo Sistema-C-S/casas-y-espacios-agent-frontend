@@ -44,22 +44,33 @@ export const conversationsService = {
     return data.data
   },
 
-  async replyText(id: string, text: string): Promise<{ message: Message }> {
-    const { data } = await apiClient.post(`/api/v1/panel/conversations/${id}/reply`, { text })
+  // `clientMessageId` (a UUID generated once per message) makes a retry idempotent:
+  // the backend returns the already-sent message instead of sending it again.
+  async replyText(id: string, text: string, clientMessageId?: string): Promise<{ message: Message }> {
+    const body = clientMessageId ? { text, client_message_id: clientMessageId } : { text }
+    const { data } = await apiClient.post(`/api/v1/panel/conversations/${id}/reply`, body)
     return data.data
   },
 
-  async replyMedia(id: string, file: File, caption?: string): Promise<{ message: Message }> {
+  async replyMedia(
+    id: string,
+    file: File,
+    caption?: string,
+    clientMessageId?: string,
+  ): Promise<{ message: Message }> {
     const formData = new FormData()
     formData.append('file', file)
     if (caption) {
       formData.append('caption', caption)
     }
+    if (clientMessageId) {
+      formData.append('client_message_id', clientMessageId)
+    }
     const { data } = await apiClient.post(`/api/v1/panel/conversations/${id}/reply/media`, formData)
     return data.data
   },
 
-  async replyAudio(id: string, file: Blob): Promise<{ message: Message }> {
+  async replyAudio(id: string, file: Blob, clientMessageId?: string): Promise<{ message: Message }> {
     const formData = new FormData()
     
     let audioFile = file
@@ -77,6 +88,9 @@ export const conversationsService = {
     }
 
     formData.append('file', audioFile, filename)
+    if (clientMessageId) {
+      formData.append('client_message_id', clientMessageId)
+    }
     const { data } = await apiClient.post(`/api/v1/panel/conversations/${id}/reply/audio`, formData)
     return data.data
   },

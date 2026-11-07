@@ -19,13 +19,15 @@ export function useNotificationsBadgeSync(enabled: boolean): void {
       const { signal } = controller
       const startedAt = Date.now()
       notificationsService
-        .list({ status: 'pendiente', limit: 1 }, signal)
+        .list({ status: 'pendiente', limit: 1 }, signal, { silent: true })
         .then((result) => {
           if (!signal.aborted) useNotificationsStore.getState().setPendingCountSnapshot(result.pending_count, startedAt)
         })
         .catch(() => {
-          // Silent: the badge keeps its last value and the next event or
-          // reconnect corrects it — a failed count is not worth a toast.
+          // The request is `silent` (no interceptor toast) too: an older backend
+          // without the route (404) or a missing table (503) must not nag on every
+          // login/reconnect. The badge keeps its last value; the next event or
+          // reconnect corrects it.
         })
     }
 

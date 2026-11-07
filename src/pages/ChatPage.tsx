@@ -274,6 +274,7 @@ export default function ChatPage() {
   // Deep link from a notification attachment: scroll to the receipt message.
   const highlightedWamId = useFocusMessage({
     focusWamId,
+    conversationId,
     messages,
     isReady: !isLoading && conversation !== null,
     feedRef,

@@ -23,6 +23,10 @@ import type {
 
 export const NOTIFICATIONS_PAGE_SIZE = 20
 
+// The close and its follow-up refetch report their own outcome (dialog message
+// or toast); the interceptor's generic toast would stack a second, vaguer one.
+const SILENT = { silent: true } as const
+
 export type CloseOutcome =
   | { kind: 'closed'; notification: AgentNotification }
   | { kind: 'already_closed'; notification: AgentNotification | null }
@@ -158,7 +162,7 @@ export function useNotificationsInbox(filter: NotificationStatusFilter) {
   const refetch = useCallback(
     async (id: string): Promise<RefetchOutcome> => {
       try {
-        const { notification } = await notificationsService.getById(id, getSignal())
+        const { notification } = await notificationsService.getById(id, getSignal(), SILENT)
         if (!isMounted()) return { kind: 'error' }
         dispatch({ type: 'upserted', item: notification })
         return { kind: 'found', notification }
@@ -177,8 +181,12 @@ export function useNotificationsInbox(filter: NotificationStatusFilter) {
 
   const close = useCallback(
     async (id: string, status: NotificationCloseStatus, note: string): Promise<CloseOutcome> => {
+      const startedAt = Date.now()
       try {
-        const { notification } = await notificationsService.close(id, { status, note })
+        const { notification } = await notificationsService.close(id, { status, note }, SILENT)
+        // The PATCH carries no pending_count; the WS event will set the
+        // authoritative one, which this converges with rather than adds to.
+        useNotificationsStore.getState().decrementPendingAfterClose(startedAt)
         if (isMounted()) dispatch({ type: 'upserted', item: notification })
         return { kind: 'closed', notification }
       } catch (err) {

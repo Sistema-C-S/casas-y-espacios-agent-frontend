@@ -180,7 +180,9 @@ describe('ChatPage — 24h window refreshed by an inbound message', () => {
 
   it('shows the refreshed countdown instead of the one it loaded with', async () => {
     // 30 minutes left — under the 2h threshold, so the page is warning already.
-    const nearlyOver = new Date(Date.now() + 30 * 60 * 1000).toISOString()
+    // 30 s short of 30 min: the countdown floors to 29 min however fast the render is
+    // (exactly +30 min read "30 min" whenever no millisecond passed — a flaky test).
+    const nearlyOver = new Date(Date.now() + 30 * 60 * 1000 - 30_000).toISOString()
     getById.mockResolvedValue({
       conversation: conversation(nearlyOver),
       messages: [],
@@ -209,7 +211,8 @@ describe('ChatPage — 24h window refreshed by an inbound message', () => {
     // null means the backend could not resolve it — the window only ever moves
     // forward, so it never legitimately reverts to unknown. Overwriting here
     // would throw away a countdown that is still correct.
-    const inThreeHours = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString()
+    // 30 s short of 3 h: always "2 h 59 min" (see nearlyOver above).
+    const inThreeHours = new Date(Date.now() + 3 * 60 * 60 * 1000 - 30_000).toISOString()
     getById.mockResolvedValue({
       conversation: conversation(inThreeHours),
       messages: [],

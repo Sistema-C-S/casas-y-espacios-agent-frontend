@@ -30,7 +30,8 @@ export interface NotificationClient {
 export interface NotificationConversation {
   id: string;
   case_number: string | null;
-  status: ConversationStatus;
+  /** Null when the backend could not join the conversation. */
+  status: ConversationStatus | null;
 }
 
 export interface NotificationResolver {
