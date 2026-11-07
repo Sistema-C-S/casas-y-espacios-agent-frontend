@@ -1,4 +1,4 @@
-import { toast } from 'sonner'
+import { useToastStore } from '../../store/toastStore'
 import { isValidEmail } from '../../lib/mailto'
 
 interface EmailLinkProps {
@@ -15,12 +15,14 @@ export function EmailLink({ email, className = '' }: EmailLinkProps) {
   const valid = isValidEmail(value)
   const at = value.lastIndexOf('@')
 
+  const showToast = useToastStore((s) => s.showToast)
+
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(value)
-      toast.success('Correo copiado')
+      showToast('Correo copiado', 'success')
     } catch {
-      toast.error('No se pudo copiar el correo')
+      showToast('No se pudo copiar el correo', 'error')
     }
   }
 

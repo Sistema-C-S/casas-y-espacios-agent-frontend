@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { conversationsService } from '../../services/conversations'
 import { useSendQueue } from '../../hooks/useSendQueue'
+import { useToastStore } from '../../store/toastStore'
 import AudioRecorder from './AudioRecorder'
 import type { Message } from '../../types'
 import {
@@ -75,11 +76,27 @@ interface ChatInputProps {
 type OutboxEntry = {
   localId: string
   conversationId: string
+  /** Client name when the message was written, for a failure shown after the advisor moved on. */
+  clientName: string
   bubble: Message
 } & (
   | { kind: 'text'; text: string }
   | { kind: 'media'; file: File; caption: string | undefined; bubbleUrl: string }
 )
+
+const DEFAULT_CLIENT_NAME = 'Cliente'
+const FAILURE_TOAST_PREVIEW_CHARS = 40
+
+// Names the chat a failed send belonged to when the advisor is already in another one.
+function backgroundFailureToast(entry: OutboxEntry): string {
+  const name = entry.clientName.trim()
+  const who = name && name !== DEFAULT_CLIENT_NAME ? name : 'otra conversación'
+  const raw = entry.kind === 'text' ? entry.text : (entry.caption ?? entry.file.name)
+  const preview = raw.length > FAILURE_TOAST_PREVIEW_CHARS
+    ? `${raw.slice(0, FAILURE_TOAST_PREVIEW_CHARS).trimEnd()}…`
+    : raw
+  return `No se pudo enviar tu ${entry.kind === 'text' ? 'mensaje' : 'archivo'} a ${who}: «${preview}». Ábrelo y envíalo de nuevo.`
+}
 
 function makeLocalId(): string {
   return `local-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -821,7 +838,11 @@ export default function ChatInput({
         onMessageFailed(localId)
         // The failed bubble is marked either way; the banner and the window state
         // belong to the conversation that is open now, not to the one that failed.
-        if (entry.conversationId !== conversationIdRef.current) return
+        if (entry.conversationId !== conversationIdRef.current) {
+          // Nothing on screen tells the advisor this text never went out.
+          useToastStore.getState().showToast(backgroundFailureToast(entry), 'error')
+          return
+        }
         failedLocalIdRef.current = localId
         setSendError(
           getErrorMessage(
@@ -837,7 +858,7 @@ export default function ChatInput({
       },
       // Never left the browser: an earlier message failed first.
       onSkipped: () => onMessageFailed(localId),
-    })
+    }, entry.conversationId)
   }
 
   function retryMessage(localId: string) {
@@ -907,7 +928,7 @@ export default function ChatInput({
     scrollFeedToEnd()
     textareaRef.current?.focus()
 
-    enqueueEntry({ kind: 'text', localId, conversationId, bubble, text: trimmed })
+    enqueueEntry({ kind: 'text', localId, conversationId, clientName, bubble, text: trimmed })
   }
 
   function sendSelectedFile(file: File) {
@@ -945,7 +966,7 @@ export default function ChatInput({
     setSendError(null)
     scrollFeedToEnd()
 
-    enqueueEntry({ kind: 'media', localId, conversationId, bubble, file, caption, bubbleUrl })
+    enqueueEntry({ kind: 'media', localId, conversationId, clientName, bubble, file, caption, bubbleUrl })
   }
 
   function handleSend() {
