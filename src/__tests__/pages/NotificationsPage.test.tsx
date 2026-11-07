@@ -98,6 +98,17 @@ describe('NotificationsPage', () => {
     expect(useNotificationsStore.getState().pendingCount).toBe(2)
   })
 
+  it('renders a row whose conversation status is null (the backend join was missing)', async () => {
+    const orphan = notification({
+      id: 'z',
+      conversation: { id: 'conv-z', case_number: 'CE-555', status: null },
+    })
+    list.mockResolvedValue({ notifications: [orphan], total: 1, limit: 20, offset: 0, pending_count: 1 })
+    renderPage()
+    const row = await rowOf('CE-555')
+    expect(within(row).queryByText('Conversación cerrada')).not.toBeInTheDocument()
+  })
+
   it('resolves a notification from its row and drops it from the pending tab', async () => {
     close.mockResolvedValue({ notification: { ...closedBy('Ana'), resolved_by: { id: 'adv-1', full_name: 'Ana' } } })
     renderPage()
@@ -107,10 +118,47 @@ describe('NotificationsPage', () => {
     fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'Registrado' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Marcar como resuelta' }))
 
-    await waitFor(() => expect(close).toHaveBeenCalledWith('a', { status: 'resuelta', note: 'Registrado' }))
+    await waitFor(() => expect(close).toHaveBeenCalledWith('a', { status: 'resuelta', note: 'Registrado' }, { silent: true }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(useToastStore.getState().toasts[0].message).toBe('Notificación marcada como resuelta.')
     expect(screen.queryByText('CE-123')).not.toBeInTheDocument()
+  })
+
+  it('decrements the badge locally when a pending notification is closed, and converges with the WS event', async () => {
+    close.mockResolvedValue({ notification: { ...closedBy('Ana'), resolved_by: { id: 'adv-1', full_name: 'Ana' } } })
+    renderPage()
+    fireEvent.click(within(await rowOf('CE-123')).getByRole('button', { name: 'Resolver' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Marcar como resuelta' }))
+    await waitFor(() => expect(useNotificationsStore.getState().pendingCount).toBe(1))
+
+    // The authoritative event lands after the local decrement: same number, not 0.
+    act(() => {
+      // useWebSocket applies pending_count to the store before calling the page handler.
+      useNotificationsStore.getState().setPendingCount(1)
+      wsHandlers.onNotificationUpdated?.({ notification: closedBy('Ana'), pending_count: 1 })
+    })
+    expect(useNotificationsStore.getState().pendingCount).toBe(1)
+  })
+
+  it('does not decrement twice when the WS event arrives before the PATCH response', async () => {
+    let resolveClose!: (value: unknown) => void
+    close.mockReturnValue(new Promise((resolve) => { resolveClose = resolve }))
+    renderPage()
+    fireEvent.click(within(await rowOf('CE-123')).getByRole('button', { name: 'Resolver' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Marcar como resuelta' }))
+    await waitFor(() => expect(close).toHaveBeenCalled())
+
+    act(() => {
+      // useWebSocket applies pending_count to the store before calling the page handler.
+      useNotificationsStore.getState().setPendingCount(1)
+      wsHandlers.onNotificationUpdated?.({ notification: closedBy('Ana'), pending_count: 1 })
+    })
+    expect(useNotificationsStore.getState().pendingCount).toBe(1)
+    await act(async () => {
+      resolveClose({ notification: { ...closedBy('Ana'), resolved_by: { id: 'adv-1', full_name: 'Ana' } } })
+    })
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(useNotificationsStore.getState().pendingCount).toBe(1)
   })
 
   it('requires a note to discard', async () => {
@@ -129,7 +177,7 @@ describe('NotificationsPage', () => {
     fireEvent.click(within(await rowOf('CE-123')).getByRole('button', { name: 'Resolver' }))
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Marcar como resuelta' }))
 
-    await waitFor(() => expect(getById).toHaveBeenCalledWith('a', expect.any(AbortSignal)))
+    await waitFor(() => expect(getById).toHaveBeenCalledWith('a', expect.any(AbortSignal), { silent: true }))
     await waitFor(() =>
       expect(useToastStore.getState().toasts.map((t) => t.message)).toContain('Laura Gómez ya cerró esta notificación.'),
     )
@@ -144,6 +192,17 @@ describe('NotificationsPage', () => {
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Marcar como resuelta' }))
     expect(await screen.findByText('No se pudo confirmar el cierre. Intenta de nuevo.')).toBeInTheDocument()
     expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('sends the close and its follow-up refetch silently so the interceptor does not stack a second toast', async () => {
+    close.mockRejectedValue(apiError(503, 'SUPABASE_ERROR'))
+    getById.mockResolvedValue({ notification: pendingA })
+    renderPage()
+    fireEvent.click(within(await rowOf('CE-123')).getByRole('button', { name: 'Resolver' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Marcar como resuelta' }))
+    await screen.findByText('No se pudo confirmar el cierre. Intenta de nuevo.')
+    expect(close).toHaveBeenCalledWith('a', expect.objectContaining({ status: 'resuelta' }), { silent: true })
+    expect(getById).toHaveBeenCalledWith('a', expect.any(AbortSignal), { silent: true })
   })
 
   it('on 503 does not claim a close that another advisor made', async () => {

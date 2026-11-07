@@ -16,6 +16,12 @@ interface NotificationsState {
   setPendingCount: (count: number) => void
   /** Count from an HTTP response; ignored if a live count arrived after the request started. */
   setPendingCountSnapshot: (count: number, requestStartedAt: number) => void
+  /**
+   * One pending notification was closed by this advisor (the PATCH response has
+   * no count). Ignored if a live count arrived after the request started: that
+   * count is authoritative and already includes the close.
+   */
+  decrementPendingAfterClose: (requestStartedAt: number) => void
   setIncoming: (notification: AgentNotification) => void
   clearIncoming: () => void
   reset: () => void
@@ -33,6 +39,10 @@ export const useNotificationsStore = create<NotificationsState>((set) => ({
   setPendingCount: (count) => set({ pendingCount: toCount(count), liveCountAt: Date.now() }),
   setPendingCountSnapshot: (count, requestStartedAt) =>
     set((state) => (state.liveCountAt > requestStartedAt ? state : { pendingCount: toCount(count) })),
+  decrementPendingAfterClose: (requestStartedAt) =>
+    set((state) =>
+      state.liveCountAt > requestStartedAt ? state : { pendingCount: toCount(state.pendingCount - 1) },
+    ),
   setIncoming: (incoming) => set({ incoming }),
   clearIncoming: () => set({ incoming: null }),
   reset: () => set(INITIAL_STATE),

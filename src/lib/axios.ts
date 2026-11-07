@@ -3,6 +3,17 @@ import type { InternalAxiosRequestConfig } from 'axios'
 import { useAuthStore, getStoredSession, isSameBrowserSession } from '../store/authStore'
 import type { ToastType } from '../store/toastStore'
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /**
+     * Opts the request out of the interceptor's global error toasts. The promise
+     * still rejects, so the caller handles the failure itself (or ignores it).
+     * Session handling (401 refresh / logout) is unaffected.
+     */
+    silent?: boolean
+  }
+}
+
 // Retry/refresh bookkeeping flags stashed on the request config as it's replayed
 // through the interceptor chain.
 type RetryableRequestConfig = InternalAxiosRequestConfig & {
@@ -184,7 +195,8 @@ export async function forceRefreshToken(): Promise<string | null> {
 }
 
 // Decouple toast notifications from the React store — ToastStack listens for this event
-function dispatchToast(message: string, type: ToastType): void {
+function dispatchToast(message: string, type: ToastType, silent = false): void {
+  if (silent) return
   window.dispatchEvent(new CustomEvent('api-toast', { detail: { message, type } }))
 }
 
@@ -284,6 +296,7 @@ apiClient.interceptors.response.use(
       return Promise.reject(error)
     }
 
+    const silent = error.config?.silent === true
     const isLoginEndpoint = error.config?.url?.includes('/auth/token') &&
       !error.config?.url?.includes('/auth/token/refresh')
 
@@ -311,14 +324,14 @@ apiClient.interceptors.response.use(
           return await apiClient(originalRequest)
         } catch (retryError) {
           if (axios.isAxiosError(retryError) && !retryError.response) {
-            dispatchToast('Sin conexión. Verifica tu conexión a internet.', 'error')
+            dispatchToast('Sin conexión. Verifica tu conexión a internet.', 'error', silent)
           }
           return Promise.reject(retryError)
         }
       }
 
       if (!isLoginEndpoint) {
-        dispatchToast('Sin conexión. Verifica tu conexión a internet.', 'error')
+        dispatchToast('Sin conexión. Verifica tu conexión a internet.', 'error', silent)
       }
       return Promise.reject(error)
     }
@@ -418,46 +431,46 @@ apiClient.interceptors.response.use(
             message: 'Contacta a un administrador para restablecer el acceso.',
           })
         } else if (code === 'FORBIDDEN') {
-          dispatchToast('No tienes permiso para realizar esta acción.', 'error')
+          dispatchToast('No tienes permiso para realizar esta acción.', 'error', silent)
         } else if (code === 'CONVERSATION_OUTSIDE_AREA') {
-          dispatchToast('Esta conversación no pertenece a tu área.', 'warning')
+          dispatchToast('Esta conversación no pertenece a tu área.', 'warning', silent)
         } else if (code === 'CANNOT_EDIT_YOURSELF') {
-          dispatchToast('No puedes editar tu propio perfil desde esta sección.', 'warning')
+          dispatchToast('No puedes editar tu propio perfil desde esta sección.', 'warning', silent)
         } else {
           // M-04: never pass raw backend message — use generic string instead.
-          dispatchToast('Acceso denegado.', 'error')
+          dispatchToast('Acceso denegado.', 'error', silent)
         }
         break
 
       case 409:
         if (code === 'ALREADY_REVIEWED') {
-          dispatchToast('Esta alerta ya fue revisada.', 'info')
+          dispatchToast('Esta alerta ya fue revisada.', 'info', silent)
         } else {
           // M-04: use hardcoded string, not raw backend message.
-          dispatchToast('Conflicto al procesar la solicitud.', 'warning')
+          dispatchToast('Conflicto al procesar la solicitud.', 'warning', silent)
         }
         break
 
       case 500:
-        dispatchToast('Error interno del servidor. Intenta nuevamente.', 'error')
+        dispatchToast('Error interno del servidor. Intenta nuevamente.', 'error', silent)
         break
 
       case 502:
         if (code === 'META_API_ERROR') {
-          dispatchToast('No se pudo enviar el mensaje a WhatsApp. Intenta nuevamente.', 'error')
+          dispatchToast('No se pudo enviar el mensaje a WhatsApp. Intenta nuevamente.', 'error', silent)
         } else if (code === 'STORAGE_ERROR') {
-          dispatchToast('Error al guardar el archivo. Intenta nuevamente.', 'error')
+          dispatchToast('Error al guardar el archivo. Intenta nuevamente.', 'error', silent)
         } else {
-          dispatchToast('Error de comunicación con un servicio externo.', 'error')
+          dispatchToast('Error de comunicación con un servicio externo.', 'error', silent)
         }
         break
 
       case 503:
-        dispatchToast('Servicio de almacenamiento no disponible.', 'error')
+        dispatchToast('Servicio de almacenamiento no disponible.', 'error', silent)
         break
 
       default:
-        dispatchToast(`Error inesperado (${status}). Intenta nuevamente.`, 'error')
+        dispatchToast(`Error inesperado (${status}). Intenta nuevamente.`, 'error', silent)
         break
     }
 

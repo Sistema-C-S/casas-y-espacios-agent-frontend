@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { useFocusMessage, MAX_FOCUS_PAGES } from '../../hooks/useFocusMessage'
+import { useFocusMessage, MAX_FOCUS_PAGES, BUSY_RETRY_MS, MAX_BUSY_RETRIES } from '../../hooks/useFocusMessage'
 import { useToastStore } from '../../store/toastStore'
 import type { Message } from '../../types'
 
@@ -139,5 +139,103 @@ describe('useFocusMessage', () => {
     })
     expect(loadOlder).not.toHaveBeenCalled()
     expect(useToastStore.getState().toasts).toHaveLength(0)
+  })
+
+  it('scrolls again when the same notification is opened a second time', async () => {
+    const feedRef = feedWith(['wamid.A'])
+    const messages = [message('m1', 'wamid.A')]
+    const { result, rerender } = renderHook(
+      ({ target }: { target: string | null }) =>
+        useFocusMessage({
+          focusWamId: target,
+          messages,
+          isReady: true,
+          feedRef,
+          loadOlder: vi.fn(),
+          canLoadOlder: () => true,
+        }),
+      { initialProps: { target: 'wamid.A' as string | null } },
+    )
+    await waitFor(() => expect(result.current).toBe('wamid.A'))
+    const node = feedRef.current.firstElementChild as HTMLElement
+    expect(node.scrollIntoView).toHaveBeenCalledTimes(1)
+
+    rerender({ target: null })
+    rerender({ target: 'wamid.A' })
+    await waitFor(() => expect(node.scrollIntoView).toHaveBeenCalledTimes(2))
+  })
+
+  it('scrolls again for the same wam id after the chat reloads (not ready, then ready)', async () => {
+    const feedRef = feedWith(['wamid.A'])
+    const messages = [message('m1', 'wamid.A')]
+    const { rerender } = renderHook(
+      ({ ready }: { ready: boolean }) =>
+        useFocusMessage({
+          focusWamId: 'wamid.A',
+          messages,
+          isReady: ready,
+          feedRef,
+          loadOlder: vi.fn(),
+          canLoadOlder: () => true,
+        }),
+      { initialProps: { ready: true } },
+    )
+    const node = feedRef.current.firstElementChild as HTMLElement
+    await waitFor(() => expect(node.scrollIntoView).toHaveBeenCalledTimes(1))
+
+    rerender({ ready: false })
+    rerender({ ready: true })
+    await waitFor(() => expect(node.scrollIntoView).toHaveBeenCalledTimes(2))
+  })
+
+  it('gives each conversation its own page budget', async () => {
+    const loadOlder = vi.fn(async () => 100)
+    const messages = [message('m1', 'wamid.X')]
+    const { rerender } = renderHook(
+      ({ conversationId }: { conversationId: string }) =>
+        useFocusMessage({
+          focusWamId: 'wamid.MISSING',
+          conversationId,
+          messages,
+          isReady: true,
+          feedRef: feedWith([]),
+          loadOlder,
+          canLoadOlder: () => true,
+        }),
+      { initialProps: { conversationId: 'conv-1' } },
+    )
+    await waitFor(() => expect(loadOlder).toHaveBeenCalledTimes(MAX_FOCUS_PAGES))
+    await waitFor(() => expect(useToastStore.getState().toasts).toHaveLength(1))
+
+    rerender({ conversationId: 'conv-2' })
+    await waitFor(() => expect(loadOlder).toHaveBeenCalledTimes(MAX_FOCUS_PAGES * 2))
+  })
+
+  describe('when another load keeps the page busy', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('ends the search with the notice instead of waiting forever', async () => {
+      const loadOlder = vi.fn(async () => null)
+      const stable = [message('m1', 'wamid.X')]
+      renderHook(() =>
+        useFocusMessage({
+          focusWamId: 'wamid.MISSING',
+          messages: stable,
+          isReady: true,
+          feedRef: feedWith([]),
+          loadOlder,
+          canLoadOlder: () => true,
+        }),
+      )
+      // One act per tick: React only re-renders (and re-runs the search) when act exits.
+      for (let tick = 0; tick < MAX_BUSY_RETRIES + 2; tick += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(BUSY_RETRY_MS)
+        })
+      }
+      expect(useToastStore.getState().toasts).toHaveLength(1)
+      expect(useToastStore.getState().toasts[0].message).toMatch(/No se encontró el mensaje/)
+    })
   })
 })

@@ -11,10 +11,11 @@ import type { Message } from '../../types'
 vi.mock('../../components/chat/AudioRecorder', () => ({ default: () => null }))
 
 const replyText = vi.fn()
+const replyMedia = vi.fn()
 vi.mock('../../services/conversations', () => ({
   conversationsService: {
     replyText: (...args: unknown[]) => replyText(...args),
-    replyMedia: vi.fn(),
+    replyMedia: (...args: unknown[]) => replyMedia(...args),
   },
 }))
 
@@ -87,6 +88,7 @@ function setup(windowState: 'open' | 'closed' = 'open') {
 
 beforeEach(() => {
   replyText.mockReset()
+  replyMedia.mockReset()
   useToastStore.setState({ toasts: [] })
 })
 
@@ -117,13 +119,13 @@ describe('ChatInput send queue', () => {
     // Both bubbles are on screen, but only the first request has left.
     expect(ui.onOptimisticMessage).toHaveBeenCalledTimes(2)
     expect(replyText).toHaveBeenCalledTimes(1)
-    expect(replyText).toHaveBeenLastCalledWith('conv-1', 'uno')
+    expect(replyText).toHaveBeenLastCalledWith('conv-1', 'uno', expect.any(String))
 
     await act(async () => { first.resolve(serverMessage('m1', 'uno')) })
     await flush()
 
     expect(replyText).toHaveBeenCalledTimes(2)
-    expect(replyText).toHaveBeenLastCalledWith('conv-1', 'dos')
+    expect(replyText).toHaveBeenLastCalledWith('conv-1', 'dos', expect.any(String))
 
     await act(async () => { second.resolve(serverMessage('m2', 'dos')) })
     await flush()
@@ -182,7 +184,7 @@ describe('ChatInput send queue', () => {
     await flush()
 
     expect(replyText).toHaveBeenCalledTimes(2)
-    expect(replyText).toHaveBeenLastCalledWith('conv-1', 'uno')
+    expect(replyText).toHaveBeenLastCalledWith('conv-1', 'uno', expect.any(String))
     const repainted = ui.onOptimisticMessage.mock.calls[1][0] as Message
     expect(repainted._localId).toBe(localId)
     expect(repainted._status).toBe('sending')
@@ -205,7 +207,7 @@ describe('ChatInput send queue', () => {
     await flush()
 
     expect(replyText).toHaveBeenCalledTimes(2)
-    expect(replyText).toHaveBeenLastCalledWith('conv-1', 'uno')
+    expect(replyText).toHaveBeenLastCalledWith('conv-1', 'uno', expect.any(String))
     expect(ui.textarea().value).toBe('borrador')
     expect(screen.queryByRole('button', { name: /reintentar/i })).toBeNull()
   })
@@ -274,7 +276,7 @@ describe('ChatInput send queue across conversations', () => {
     await flush()
 
     expect(replyText).toHaveBeenCalledTimes(2)
-    expect(replyText).toHaveBeenLastCalledWith('conv-b', 'hola b')
+    expect(replyText).toHaveBeenLastCalledWith('conv-b', 'hola b', expect.any(String))
     expect(ui.onMessageConfirmed).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ id: 'm-b' }),
@@ -300,5 +302,145 @@ describe('ChatInput send queue across conversations', () => {
 
     expect(ui.onMessageFailed).toHaveBeenCalledTimes(1)
     expect(ui.onMessageConfirmed).toHaveBeenCalledTimes(1)
+  })
+})
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+describe('ChatInput client message id (idempotent retries)', () => {
+  it('reuses the same client message id on every retry of an entry', async () => {
+    replyText
+      .mockRejectedValueOnce(new Error('network'))
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValueOnce(serverMessage('m1', 'uno'))
+    const ui = setup()
+
+    ui.send('uno')
+    await flush()
+    await flush()
+    const localId = ui.onOptimisticMessage.mock.calls[0][0]._localId
+    act(() => { ui.getRetry()?.(localId) })
+    await flush()
+    await flush()
+    act(() => { ui.getRetry()?.(localId) })
+    await flush()
+    await flush()
+
+    expect(replyText).toHaveBeenCalledTimes(3)
+    const ids = replyText.mock.calls.map((call) => call[2])
+    expect(ids[0]).toMatch(UUID)
+    expect(ids[1]).toBe(ids[0])
+    expect(ids[2]).toBe(ids[0])
+  })
+
+  it('gives different messages different client message ids', async () => {
+    replyText.mockResolvedValue(serverMessage('m', 'x'))
+    const ui = setup()
+
+    ui.send('uno')
+    ui.send('dos')
+    await flush()
+    await flush()
+    await flush()
+
+    expect(replyText).toHaveBeenCalledTimes(2)
+    expect(replyText.mock.calls[0][2]).not.toBe(replyText.mock.calls[1][2])
+  })
+})
+
+describe('ChatInput media entries', () => {
+  const createObjectURL = vi.fn()
+  const revokeObjectURL = vi.fn()
+
+  beforeEach(() => {
+    createObjectURL.mockReset().mockImplementation(() => `blob:${Math.random()}`)
+    revokeObjectURL.mockReset()
+    URL.createObjectURL = createObjectURL
+    URL.revokeObjectURL = revokeObjectURL
+  })
+
+  function sendFile(container: HTMLElement, textarea: HTMLTextAreaElement) {
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    const file = new File(['x'], 'foto.png', { type: 'image/png' })
+    fireEvent.change(input, { target: { files: [file] } })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    return file
+  }
+
+  function renderComposer(conversationId = 'conv-1') {
+    const onOptimisticMessage = vi.fn()
+    const element = (id: string) => (
+      <ChatInput
+        conversationId={id}
+        clientName="Cliente"
+        agentDisplay="Administrativa"
+        waitMinutes={null}
+        onOptimisticMessage={onOptimisticMessage}
+        onMessageConfirmed={vi.fn()}
+        onMessageFailed={vi.fn()}
+        whatsappWindow={{ state: 'open', canReply: true, msLeft: 3_600_000 }}
+      />
+    )
+    const view = render(element(conversationId))
+    return { ...view, switchTo: (id: string) => view.rerender(element(id)) }
+  }
+
+  it('sends the same client message id when a media entry is retried', async () => {
+    replyMedia.mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce(serverMessage('m1', ''))
+    let retry: Retry | null = null
+    const onOptimisticMessage = vi.fn()
+    const { container } = render(
+      <ChatInput
+        conversationId="conv-1"
+        clientName="Cliente"
+        agentDisplay="Administrativa"
+        waitMinutes={null}
+        onOptimisticMessage={onOptimisticMessage}
+        onMessageConfirmed={vi.fn()}
+        onMessageFailed={vi.fn()}
+        onRegisterRetry={(fn) => { retry = fn }}
+        whatsappWindow={{ state: 'open', canReply: true, msLeft: 3_600_000 }}
+      />,
+    )
+    sendFile(container, screen.getByRole('textbox') as HTMLTextAreaElement)
+    await flush()
+    await flush()
+    const localId = onOptimisticMessage.mock.calls[0][0]._localId
+    act(() => { (retry as Retry | null)?.(localId) })
+    await flush()
+    await flush()
+
+    expect(replyMedia).toHaveBeenCalledTimes(2)
+    expect(replyMedia.mock.calls[0][3]).toMatch(UUID)
+    expect(replyMedia.mock.calls[1][3]).toBe(replyMedia.mock.calls[0][3])
+  })
+
+  it('revokes the bubble URL of a failed media entry when the advisor switches conversation', async () => {
+    replyMedia.mockRejectedValueOnce(new Error('network'))
+    const { container, switchTo } = renderComposer('conv-a')
+    sendFile(container, screen.getByRole('textbox') as HTMLTextAreaElement)
+    await flush()
+    await flush()
+    revokeObjectURL.mockClear()
+    const bubbleUrl = createObjectURL.mock.results[createObjectURL.mock.results.length - 1].value
+
+    switchTo('conv-b')
+    await flush()
+
+    expect(revokeObjectURL).toHaveBeenCalledWith(bubbleUrl)
+  })
+
+  it('revokes the bubble URL of a failed media entry on unmount', async () => {
+    replyMedia.mockRejectedValueOnce(new Error('network'))
+    const { container, unmount } = renderComposer('conv-a')
+    sendFile(container, screen.getByRole('textbox') as HTMLTextAreaElement)
+    await flush()
+    await flush()
+    revokeObjectURL.mockClear()
+    const bubbleUrl = createObjectURL.mock.results[createObjectURL.mock.results.length - 1].value
+
+    unmount()
+
+    expect(revokeObjectURL).toHaveBeenCalledWith(bubbleUrl)
   })
 })

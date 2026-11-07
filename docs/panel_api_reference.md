@@ -468,6 +468,9 @@ msg_type = "document" → render download link using media_url
 | Field  | Type     | Constraints                              |
 | ------ | -------- | ---------------------------------------- |
 | `text` | `string` | Required, non-empty, max 4096 characters |
+| `client_message_id` | `string` (UUID) | Optional. Client-generated idempotency key, see below |
+
+`client_message_id` makes a retry idempotent: the panel generates one UUID per message when the advisor sends and reuses it on every retry. If a message with that id already exists in the conversation, the backend returns that existing message (same `200` envelope) and does **not** send to WhatsApp again.
 
 **Response 200:**
 
@@ -537,6 +540,7 @@ msg_type = "document" → render download link using media_url
 | --------- | -------- | --------------------------------------- |
 | `file`    | `File`   | Required. The media file                |
 | `caption` | `string` | Optional. Caption for images and videos |
+| `client_message_id` | `string` (UUID) | Optional. Client-generated idempotency key: a repeated id returns the existing message and does not send again |
 
 **Allowed MIME types and size limits:**
 
@@ -617,6 +621,7 @@ msg_type = "document" → render download link using media_url
 | Field  | Type   | Description              |
 | ------ | ------ | ------------------------ |
 | `file` | `File` | Required. The audio file |
+| `client_message_id` | `string` (UUID) | Optional. Client-generated idempotency key: a repeated id returns the existing message and does not send again |
 
 **Allowed MIME types:** `audio/ogg`, `audio/mpeg`, `audio/mp4`, `audio/aac`, `audio/amr`
 

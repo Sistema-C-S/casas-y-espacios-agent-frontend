@@ -47,4 +47,25 @@ describe('notificationsService', () => {
     await notificationsService.getById('a/b')
     expect(apiClient.get).toHaveBeenCalledWith('/api/v1/panel/notifications/a%2Fb', {})
   })
+
+  it('forwards the silent flag on list, getById and close', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ data: { data: {} } } as never)
+    vi.mocked(apiClient.patch).mockResolvedValue({ data: { data: {} } } as never)
+
+    await notificationsService.list({ status: 'pendiente', limit: 1 }, undefined, { silent: true })
+    expect(apiClient.get).toHaveBeenLastCalledWith('/api/v1/panel/notifications', {
+      params: { status: 'pendiente', limit: 1 },
+      silent: true,
+    })
+
+    await notificationsService.getById('n-1', undefined, { silent: true })
+    expect(apiClient.get).toHaveBeenLastCalledWith('/api/v1/panel/notifications/n-1', { silent: true })
+
+    await notificationsService.close('n-1', { status: 'resuelta' }, { silent: true })
+    expect(apiClient.patch).toHaveBeenLastCalledWith(
+      '/api/v1/panel/notifications/n-1',
+      { status: 'resuelta' },
+      { silent: true },
+    )
+  })
 })

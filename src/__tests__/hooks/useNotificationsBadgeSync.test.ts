@@ -19,7 +19,7 @@ describe('useNotificationsBadgeSync', () => {
   it('loads the pending count when enabled and again after a reconnect', async () => {
     renderHook(() => useNotificationsBadgeSync(true))
     await waitFor(() => expect(useNotificationsStore.getState().pendingCount).toBe(4))
-    expect(list).toHaveBeenCalledWith({ status: 'pendiente', limit: 1 }, expect.any(AbortSignal))
+    expect(list).toHaveBeenCalledWith({ status: 'pendiente', limit: 1 }, expect.any(AbortSignal), { silent: true })
 
     list.mockResolvedValue({ notifications: [], total: 0, limit: 1, offset: 0, pending_count: 6 })
     act(() => {

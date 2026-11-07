@@ -76,6 +76,11 @@ interface ChatInputProps {
 type OutboxEntry = {
   localId: string
   conversationId: string
+  /**
+   * Generated once when the advisor sends and reused on every retry, so the
+   * backend can recognise a resend of a message it already delivered.
+   */
+  clientMessageId: string
   /** Client name when the message was written, for a failure shown after the advisor moved on. */
   clientName: string
   bubble: Message
@@ -618,9 +623,40 @@ export default function ChatInput({
   // "Reintentar" resends, since the composer no longer holds the failed text.
   const conversationIdRef = useRef(conversationId)
   const failedLocalIdRef = useRef<string | null>(null)
+  // Entries whose bubble is marked failed (sent and rejected, or skipped behind a
+  // failure). Only these may be dropped when the advisor leaves the chat — the
+  // others are still queued or in flight and must keep their payload.
+  const failedEntriesRef = useRef(new Set<string>())
+
+  function releaseEntry(localId: string) {
+    const entry = outboxRef.current.get(localId)
+    if (entry?.kind === 'media') URL.revokeObjectURL(entry.bubbleUrl)
+    outboxRef.current.delete(localId)
+    failedEntriesRef.current.delete(localId)
+  }
+
   useEffect(() => {
     conversationIdRef.current = conversationId
+    // The page reloads the thread when another chat opens, so a failed bubble of
+    // the previous one is gone: free its file and object URL instead of holding
+    // them until this composer unmounts.
+    for (const [localId, entry] of outboxRef.current) {
+      if (entry.conversationId !== conversationId && failedEntriesRef.current.has(localId)) {
+        releaseEntry(localId)
+      }
+    }
   }, [conversationId])
+
+  // Object URLs of unconfirmed media die with the composer.
+  useEffect(() => {
+    const outbox = outboxRef.current
+    return () => {
+      for (const entry of outbox.values()) {
+        if (entry.kind === 'media') URL.revokeObjectURL(entry.bubbleUrl)
+      }
+      outbox.clear()
+    }
+  }, [])
 
   // Auto-focus textarea when switching conversations, loading, or when recording ends
   useEffect(() => {
@@ -823,18 +859,25 @@ export default function ChatInput({
   function enqueueEntry(entry: OutboxEntry) {
     const { localId } = entry
     outboxRef.current.set(localId, entry)
+    failedEntriesRef.current.delete(localId)
 
     enqueue({
       run: async () => {
         const { message } =
           entry.kind === 'text'
-            ? await conversationsService.replyText(entry.conversationId, entry.text)
-            : await conversationsService.replyMedia(entry.conversationId, entry.file, entry.caption)
+            ? await conversationsService.replyText(entry.conversationId, entry.text, entry.clientMessageId)
+            : await conversationsService.replyMedia(
+                entry.conversationId,
+                entry.file,
+                entry.caption,
+                entry.clientMessageId,
+              )
         outboxRef.current.delete(localId)
         onMessageConfirmed(localId, message)
         if (entry.kind === 'media') URL.revokeObjectURL(entry.bubbleUrl)
       },
       onFailure: (error) => {
+        failedEntriesRef.current.add(localId)
         onMessageFailed(localId)
         // The failed bubble is marked either way; the banner and the window state
         // belong to the conversation that is open now, not to the one that failed.
@@ -857,7 +900,10 @@ export default function ChatInput({
         if (isWindowExpired(error)) onWindowExpired?.()
       },
       // Never left the browser: an earlier message failed first.
-      onSkipped: () => onMessageFailed(localId),
+      onSkipped: () => {
+        failedEntriesRef.current.add(localId)
+        onMessageFailed(localId)
+      },
     }, entry.conversationId)
   }
 
@@ -928,7 +974,7 @@ export default function ChatInput({
     scrollFeedToEnd()
     textareaRef.current?.focus()
 
-    enqueueEntry({ kind: 'text', localId, conversationId, clientName, bubble, text: trimmed })
+    enqueueEntry({ kind: 'text', localId, conversationId, clientMessageId: crypto.randomUUID(), clientName, bubble, text: trimmed })
   }
 
   function sendSelectedFile(file: File) {
@@ -966,7 +1012,7 @@ export default function ChatInput({
     setSendError(null)
     scrollFeedToEnd()
 
-    enqueueEntry({ kind: 'media', localId, conversationId, clientName, bubble, file, caption, bubbleUrl })
+    enqueueEntry({ kind: 'media', localId, conversationId, clientMessageId: crypto.randomUUID(), clientName, bubble, file, caption, bubbleUrl })
   }
 
   function handleSend() {
