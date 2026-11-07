@@ -16,6 +16,11 @@ Requiere el backend 2.12.0 (notificaciones del agente y correo del cliente). Des
 - Las imágenes y los links largos ya no se salen de la burbuja del chat.
 - La política de seguridad de contenido permite las fotos de inmuebles de Wasi.
 - Se resolvieron todas las vulnerabilidades reportadas por `npm audit`.
+- La cola de envío es por conversación: un mensaje que falla en un chat que ya no está abierto avisa con el nombre del cliente, y un envío lento en un chat no demora los demás.
+- Reintentar un mensaje, archivo o audio nunca lo envía dos veces (`client_message_id`, requiere el backend 2.12.0).
+- "Correo copiado" vuelve a mostrarse.
+- Un backend anterior o un error 503 ya no muestran avisos genéricos repetidos al entrar, al reconectar ni al cerrar una notificación.
+- Abrir una notificación lleva al mensaje también la segunda vez, y avisa cuando no lo encuentra; el contador baja al cerrar una notificación.
 
 ## [2.6.0] - 2026-09-27
 
